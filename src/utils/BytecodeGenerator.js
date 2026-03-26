@@ -96,6 +96,9 @@ class FunctionBytecodeGenerator {
         // ie. by functions
         this.dropDefers = {}
         this.vfuncReferences = []
+        this.vfuncCaptureBindings = []
+        this.activeVFuncMetadata = []
+        this.capturedRegisters = new Set()
 
         this.resolveExpression = resolveExpression.bind(this)
         this.resolveBinaryExpression = resolveBinaryExpression.bind(this)
@@ -132,6 +135,13 @@ class FunctionBytecodeGenerator {
             return
         }
         const {register} = this.activeVariables[variableName].pop()
+        if (this.activeVariables[variableName].length === 0) {
+            delete this.activeVariables[variableName]
+        }
+        if (this.capturedRegisters.has(register)) {
+            this.chunk.append(new Opcode('DETACH_REF', register))
+            this.capturedRegisters.delete(register)
+        }
         this.removeRegister(register)
     }
 
@@ -158,14 +168,24 @@ class FunctionBytecodeGenerator {
             log(new LogData(`Variable ${variableName} not found in scope!`, 'error', false))
             throw new Error(`Variable ${variableName} not found in scope!`)
         }
-        const {register, metadata} = scopeArray[scopeArray.length - 1]
-        if (this.getActiveLabel('vfunc')) {
-            const accessContext = this.getActiveLabel('vfunc')
+        const accessContext = this.getActiveLabel('vfunc')
+        if (accessContext) {
+            const currentContextIndex = this.activeVFuncMetadata.length - 1
+            let {register, metadata} = scopeArray[scopeArray.length - 1]
+            const sourceContextIndex = this.findVFuncContextIndex(metadata.vfuncContext)
+
+            for (let contextIndex = Math.max(sourceContextIndex + 1, 0); contextIndex < currentContextIndex; contextIndex++) {
+                this.captureVariableIntoContext(variableName, contextIndex);
+                ({register, metadata} = scopeArray[scopeArray.length - 1])
+            }
+
             if (metadata.vfuncContext !== accessContext) {
                 log(new LogData(`VFunc capturing variable ${variableName} by reference! Current Context: ${accessContext}, Variable Context: ${metadata.vfuncContext}`, 'warn'))
-                this.vfuncReferences[this.vfuncReferences.length - 1].add(register)
+                return this.captureVariableIntoContext(variableName, currentContextIndex)
             }
+            return register
         }
+        const {register} = scopeArray[scopeArray.length - 1]
         return register
     }
 
@@ -263,14 +283,118 @@ class FunctionBytecodeGenerator {
         }
     }
 
-    enterVFuncContext(label) {
+    enterVFuncContext(label, metadata) {
         this.contextLabels.vfunc.push(label)
-        this.vfuncReferences.push(new Set())
+        this.vfuncReferences.push(new Map())
+        this.vfuncCaptureBindings.push([])
+        this.activeVFuncMetadata.push({
+            label,
+            selfName: metadata?.selfName ?? null,
+            selfRegister: metadata?.selfRegister ?? null
+        })
     }
 
     exitVFuncContext() {
         this.contextLabels.vfunc.pop()
+        const captureBindings = this.vfuncCaptureBindings.pop()
+        for (let i = captureBindings.length - 1; i >= 0; i--) {
+            const {name, captureRegister} = captureBindings[i]
+            const scopeArray = this.activeVariables[name]
+            if (scopeArray && scopeArray.length > 0) {
+                const top = scopeArray[scopeArray.length - 1]
+                if (top.register === captureRegister && top.metadata?.syntheticCapture) {
+                    scopeArray.pop()
+                    if (scopeArray.length === 0) {
+                        delete this.activeVariables[name]
+                    }
+                }
+            }
+            this.removeRegister(captureRegister)
+        }
         this.vfuncReferences.pop()
+        this.activeVFuncMetadata.pop()
+    }
+
+    findVFuncContextIndex(label) {
+        if (!label || label === 'outside_of_vfunc') {
+            return -1
+        }
+        for (let i = this.activeVFuncMetadata.length - 1; i >= 0; i--) {
+            if (this.activeVFuncMetadata[i].label === label) {
+                return i
+            }
+        }
+        return -1
+    }
+
+    captureVariableIntoContext(variableName, contextIndex) {
+        const scopeArray = this.activeVariables[variableName]
+        const {register, metadata} = scopeArray[scopeArray.length - 1]
+        const targetContext = this.activeVFuncMetadata[contextIndex]
+        if (!targetContext || metadata.vfuncContext === targetContext.label) {
+            return register
+        }
+        if (targetContext.selfName === variableName && targetContext.selfRegister === register) {
+            return register
+        }
+        const referenceMap = this.vfuncReferences[contextIndex]
+        const existing = referenceMap.get(variableName)
+        if (existing) {
+            return existing.captureRegister
+        }
+        const captureRegister = this.randomRegister()
+        referenceMap.set(variableName, {
+            name: variableName,
+            captureRegister,
+            sourceRegister: register
+        })
+        this.vfuncCaptureBindings[contextIndex].push({
+            name: variableName,
+            captureRegister
+        })
+        this.capturedRegisters.add(register)
+        scopeArray.push({
+            register: captureRegister,
+            metadata: {
+                vfuncContext: targetContext.label,
+                syntheticCapture: true,
+                sourceRegister: register
+            }
+        })
+        return captureRegister
+    }
+
+    getCapturedScopeRegisters() {
+        const captured = []
+        const seenVariables = new Set()
+
+        for (let scopeIndex = this.activeScopes.length - 1; scopeIndex >= 0; scopeIndex--) {
+            const scope = this.activeScopes[scopeIndex]
+            for (let i = scope.length - 1; i >= 0; i--) {
+                const variableName = scope[i]
+                if (seenVariables.has(variableName)) {
+                    continue
+                }
+                seenVariables.add(variableName)
+                const binding = this.activeVariables[variableName]?.[this.activeVariables[variableName].length - 1]
+                if (binding && this.capturedRegisters.has(binding.register)) {
+                    captured.push(binding.register)
+                }
+            }
+        }
+
+        return captured
+    }
+
+    emitDetachForRegisters(registers) {
+        const emitted = new Set()
+        for (const register of registers) {
+            if (emitted.has(register)) {
+                continue
+            }
+            emitted.add(register)
+            this.chunk.append(new Opcode('DETACH_REF', register))
+        }
     }
 
     enterContext(type, label) {
@@ -479,9 +603,11 @@ class FunctionBytecodeGenerator {
                     })
                     this.chunk.append(opcode)
                     this.contextProcess('vfunc', opcode)
+                    this.emitDetachForRegisters(this.getCapturedScopeRegisters())
                     this.chunk.append(new Opcode('END'))
                 } else {
                     this.chunk.append(new Opcode('SET_REF', this.outputRegister, out));
+                    this.emitDetachForRegisters(this.getCapturedScopeRegisters())
                 }
                 if (needsCleanup(node.argument)) this.freeTempLoad(out)
             }

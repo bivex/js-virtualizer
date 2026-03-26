@@ -37,7 +37,7 @@ function resolveFunctionDeclaration(node, options) {
     const label = this.generateOpcodeLabel()
     const outputRegister = this.getAvailableTempLoad()
     const argMap = []
-    const dependencies = []
+    const captureMappings = []
 
     const jumpOverIP = this.chunk.getCurrentIP()
     const jumpOver = new Opcode('JUMP_UNCONDITIONAL', encodeDWORD(0))
@@ -47,6 +47,11 @@ function resolveFunctionDeclaration(node, options) {
     let thisRegister = null
 
     const lastIsRest = params.length && params[params.length - 1].type === 'RestElement'
+
+    this.enterVFuncContext(label, {
+        selfName: options.declareName,
+        selfRegister: options.declareRegister
+    })
 
     if (hasDynamicThis) {
         this.declareVariable('this')
@@ -88,21 +93,18 @@ function resolveFunctionDeclaration(node, options) {
     for (const param of hasDefault) {
         this.resolveExpression(param)
     }
-    this.enterVFuncContext(label)
     this.generate(body.body, {functionScope: true})
 
-    for (const register of this.vfuncReferences[this.vfuncReferences.length - 1]) {
-        // once the reference to this register is dropped, any references to itself will be dropped automatically
-        if (register === options.declareRegister) {
-            log(new LogData(`Skipping recursive call dependency ${outputRegister}`, 'accent', true))
+    for (const {captureRegister, sourceRegister} of this.vfuncReferences[this.vfuncReferences.length - 1].values()) {
+        if (sourceRegister === options.declareRegister) {
+            log(new LogData(`Skipping recursive call capture for ${options.declareName}`, 'accent', true))
             continue
         }
-        if (argRegisters.has(register)) {
-            log(new LogData(`Skipping argument dependency ${register}`, 'accent', true))
+        if (argRegisters.has(sourceRegister)) {
+            log(new LogData(`Skipping argument capture source ${sourceRegister}`, 'accent', true))
             continue
         }
-        dependencies.push(register)
-        this.deferDrop(register)
+        captureMappings.push(captureRegister, sourceRegister)
     }
 
     const processStack = this.getProcessStack('vfunc')
@@ -131,12 +133,12 @@ function resolveFunctionDeclaration(node, options) {
     this.exitVFuncContext()
     jumpOver.modifyArgs(encodeDWORD(this.chunk.getCurrentIP() - jumpOverIP))
     this.chunk.append(new Opcode('VFUNC_SETUP_CALLBACK', encodeDWORD(startIP - this.chunk.getCurrentIP()),
-        options.declareRegister, outputRegister, isAsync ? 1 : 0, hasDynamicThis ? 1 : 0, hasDynamicThis ? thisRegister : 0, lastIsRest ? 1 : 0, encodeArrayRegisters(scrambledArgMap), encodeArrayRegisters(argOrder), encodeArrayRegisters(dependencies)))
+        options.declareRegister, outputRegister, isAsync ? 1 : 0, hasDynamicThis ? 1 : 0, hasDynamicThis ? thisRegister : 0, lastIsRest ? 1 : 0, encodeArrayRegisters(scrambledArgMap), encodeArrayRegisters(argOrder), encodeArrayRegisters(captureMappings)))
     this.freeTempLoad(outputRegister)
 
     return {
         outputRegister: options.declareRegister,
-        dependencies,
+        dependencies: captureMappings.filter((_, index) => index % 2 === 1),
         name: options.declareName
     }
 }

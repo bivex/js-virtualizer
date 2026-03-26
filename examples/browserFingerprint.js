@@ -24,40 +24,6 @@ const vmOutputPath = path.join(outputDir, "vm.js");
 const appOutputPath = path.join(outputDir, "app.js");
 const htmlOutputPath = path.join(outputDir, "index.html");
 
-function adaptVmForBrowser(vmSource) {
-    let result = vmSource;
-
-    result = result.replace(
-        /const zlib = require\((["'])node:zlib\1\);/,
-        `const zlib = {
-    inflateSync(buffer) {
-        if (typeof pako === "undefined") {
-            throw new Error("pako is required in the browser demo");
-        }
-        return pako.inflate(buffer);
-    }
-};
-
-const Buffer = {
-    from(code, format) {
-        if (format !== "base64") {
-            throw new Error("Browser demo only supports base64 bytecode");
-        }
-        const binary = atob(code);
-        const bytes = new Uint8Array(binary.length);
-        for (let i = 0; i < binary.length; i++) {
-            bytes[i] = binary.charCodeAt(i);
-        }
-        return bytes;
-    }
-};`
-    );
-
-    result = result.replace(/module\.exports = JSVM;?/, "window.JSVM = JSVM");
-
-    return result;
-}
-
 function buildHtml() {
     return `<!doctype html>
 <html lang="en">
@@ -119,11 +85,6 @@ function buildHtml() {
       <pre id="fingerprint-output">Loading virtualized fingerprint...</pre>
     </div>
   </main>
-  <script>
-    window.require = function () {
-      return window.JSVM;
-    };
-  </script>
   <script src="https://cdn.jsdelivr.net/npm/pako@2.1.0/dist/pako.min.js"></script>
   <script src="./vm.js"></script>
   <script src="./app.js"></script>
@@ -141,7 +102,7 @@ async function main() {
         passes: ["RemoveUnused", "ObfuscateTranspiled"]
     });
 
-    fs.writeFileSync(vmOutputPath, adaptVmForBrowser(result.vm));
+    fs.writeFileSync(vmOutputPath, result.vm);
     fs.writeFileSync(appOutputPath, result.transpiled);
     fs.writeFileSync(htmlOutputPath, buildHtml());
 

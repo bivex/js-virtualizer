@@ -13,7 +13,25 @@
  * Commercial licensing available upon request.
  */
 
-const zlib = require("node:zlib");
+const globalScope = typeof globalThis !== "undefined"
+    ? globalThis
+    : typeof window !== "undefined"
+        ? window
+        : typeof global !== "undefined"
+            ? global
+            : {};
+
+const nodeBuffer = typeof Buffer !== "undefined" ? Buffer : null;
+const zlib = (() => {
+    if (typeof require !== "function") {
+        return null;
+    }
+    try {
+        return require("node:zlib");
+    } catch (error) {
+        return null;
+    }
+})();
 
 const BYTECODE_INTEGRITY_PREFIX = "JSCI1";
 
@@ -126,8 +144,59 @@ function restoreProtectedRegisterValue(state, register, value) {
     return state.heap.get(token);
 }
 
+function createRegisterReference(value) {
+    return {
+        value
+    };
+}
+
+function decodeBase64ToBytes(code) {
+    if (nodeBuffer) {
+        return nodeBuffer.from(code, "base64");
+    }
+
+    if (typeof globalScope.atob === "function") {
+        const binary = globalScope.atob(code);
+        const bytes = new Uint8Array(binary.length);
+        for (let i = 0; i < binary.length; i++) {
+            bytes[i] = binary.charCodeAt(i);
+        }
+        return bytes;
+    }
+
+    throw new Error("Base64 decoding is not available in this runtime");
+}
+
+function decodeBytecodeBuffer(code, format) {
+    if (!format) {
+        return code;
+    }
+
+    if (nodeBuffer) {
+        return nodeBuffer.from(code, format);
+    }
+
+    if (format === "base64") {
+        return decodeBase64ToBytes(code);
+    }
+
+    throw new Error(`Unsupported browser bytecode encoding: ${format}`);
+}
+
+function inflateBytecode(buffer) {
+    if (zlib && typeof zlib.inflateSync === "function") {
+        return zlib.inflateSync(buffer);
+    }
+
+    if (globalScope.pako && typeof globalScope.pako.inflate === "function") {
+        return globalScope.pako.inflate(buffer);
+    }
+
+    throw new Error("Compressed browser bytecode requires globalThis.pako.inflate");
+}
+
 const registerNames = ["INSTRUCTION_POINTER", "UNDEFINED", "VOID"]
-const opNames = ["LOAD_BYTE", "LOAD_BOOL", "LOAD_DWORD", "LOAD_FLOAT", "LOAD_STRING", "LOAD_ARRAY", "LOAD_OBJECT", "SETUP_OBJECT", "SETUP_ARRAY", "INIT_CONSTRUCTOR", "FUNC_CALL", "FUNC_ARRAY_CALL", "FUNC_ARRAY_CALL_AWAIT", "AWAIT", "VFUNC_CALL", "VFUNC_SETUP_CALLBACK", "VFUNC_RETURN", "JUMP_UNCONDITIONAL", "JUMP_EQ", "JUMP_NOT_EQ", "TRY_CATCH_FINALLY", "THROW", "THROW_ARGUMENT", "SET", "SET_REF", "SET_PROP", "GET_PROP", "SET_INDEX", "GET_INDEX", "WRITE_EXT", "SET_NULL", "SET_UNDEFINED", "EQ_COERCE", "EQ", "NOT_EQ_COERCE", "NOT_EQ", "LESS_THAN", "LESS_THAN_EQ", "GREATER_THAN", "GREATER_THAN_EQ", "TEST", "TEST_NEQ", "ADD", "SUBTRACT", "MULTIPLY", "DIVIDE", "MODULO", "POWER", "AND", "BNOT", "OR", "XOR", "SHIFT_LEFT", "SHIFT_RIGHT", "SPREAD", "SPREAD_INTO", "NOT", "NEGATE", "PLUS", "INCREMENT", "DECREMENT", "TYPEOF", "VOID", "DELETE", "LOGICAL_AND", "LOGICAL_OR", "LOGICAL_NULLISH", "GET_ITERATOR", "ITERATOR_NEXT", "ITERATOR_DONE", "ITERATOR_VALUE", "GET_PROPERTIES", "NOP", "END", "PRINT"]
+const opNames = ["LOAD_BYTE", "LOAD_BOOL", "LOAD_DWORD", "LOAD_FLOAT", "LOAD_STRING", "LOAD_ARRAY", "LOAD_OBJECT", "SETUP_OBJECT", "SETUP_ARRAY", "INIT_CONSTRUCTOR", "FUNC_CALL", "FUNC_ARRAY_CALL", "FUNC_ARRAY_CALL_AWAIT", "AWAIT", "VFUNC_CALL", "VFUNC_SETUP_CALLBACK", "VFUNC_RETURN", "JUMP_UNCONDITIONAL", "JUMP_EQ", "JUMP_NOT_EQ", "TRY_CATCH_FINALLY", "THROW", "THROW_ARGUMENT", "SET", "SET_REF", "SET_PROP", "GET_PROP", "SET_INDEX", "GET_INDEX", "WRITE_EXT", "DETACH_REF", "SET_NULL", "SET_UNDEFINED", "EQ_COERCE", "EQ", "NOT_EQ_COERCE", "NOT_EQ", "LESS_THAN", "LESS_THAN_EQ", "GREATER_THAN", "GREATER_THAN_EQ", "TEST", "TEST_NEQ", "ADD", "SUBTRACT", "MULTIPLY", "DIVIDE", "MODULO", "POWER", "AND", "BNOT", "OR", "XOR", "SHIFT_LEFT", "SHIFT_RIGHT", "SPREAD", "SPREAD_INTO", "NOT", "NEGATE", "PLUS", "INCREMENT", "DECREMENT", "TYPEOF", "VOID", "DELETE", "LOGICAL_AND", "LOGICAL_OR", "LOGICAL_NULLISH", "GET_ITERATOR", "ITERATOR_NEXT", "ITERATOR_DONE", "ITERATOR_VALUE", "GET_PROPERTIES", "NOP", "END", "PRINT"]
 
 const reservedNames = new Set(registerNames)
 reservedNames.delete("VOID")
@@ -199,7 +268,7 @@ const implOpcode = {
     }, VFUNC_CALL: function () {
         const cur = this.read(registers.INSTRUCTION_POINTER);
         const offset = this.readDWORD(), returnDataStore = this.readByte(), argMap = this.readArrayRegisters();
-        this.regstack.push([this.registers.slice(), returnDataStore]);
+        this.regstack.push([this.registers.slice(), returnDataStore, new Map(this.registerRefs)]);
         for (let i = 0; i < argMap.length; i += 2) {
             this.write(argMap[i], this.read(argMap[i + 1]));
         }
@@ -207,14 +276,29 @@ const implOpcode = {
     }, VFUNC_SETUP_CALLBACK: function () {
         const cur = this.read(registers.INSTRUCTION_POINTER);
         const fnOffset = this.readDWORD(), dest = this.readByte(), returnDataStore = this.readByte(),
-            isAsync = this.readBool(), hasDynamicThis = this.readBool(), thisRegister = this.readByte(), useRest = this.readBool(), argArrayMapper = this.readArrayRegisters(), argOrder = this.readArrayRegisters();
-
-
-        const mutableRegisters = this.readArrayRegisters();
+            isAsync = this.readBool(), hasDynamicThis = this.readBool(), thisRegister = this.readByte(), useRest = this.readBool(), argArrayMapper = this.readArrayRegisters(), argOrder = this.readArrayRegisters(), captureMappings = this.readArrayRegisters();
         const vm = this;
+        const captureReferences = [];
+
+        for (let i = 0; i < captureMappings.length; i += 2) {
+            const captureRegister = captureMappings[i];
+            const sourceRegister = captureMappings[i + 1];
+            const reference = vm.getOrCreateRegisterReference(sourceRegister);
+            captureReferences.push({
+                captureRegister,
+                reference
+            });
+        }
+
+        function bindCaptureReferences(target) {
+            for (const {captureRegister, reference} of captureReferences) {
+                target.bindRegisterReference(captureRegister, reference);
+            }
+        }
 
         function runSync(thisArg, args) {
-            vm.regstack.push([vm.registers.slice(), returnDataStore]);
+            vm.regstack.push([vm.registers.slice(), returnDataStore, new Map(vm.registerRefs)]);
+            bindCaptureReferences(vm);
             const restIndex = argOrder.length - 1;
             if (hasDynamicThis) {
                 vm.write(thisRegister, thisArg);
@@ -230,12 +314,9 @@ const implOpcode = {
             vm.registers[registers.INSTRUCTION_POINTER] = cur + fnOffset - 1;
             vm.run()
             const res = vm.read(returnDataStore);
-            const [oldRegisters] = vm.regstack.pop();
-            const curRegisters = vm.registers.slice();
+            const [oldRegisters, _, oldRegisterRefs] = vm.regstack.pop();
             vm.registers = oldRegisters;
-            for (const mutableRegister of mutableRegisters) {
-                vm.registers[mutableRegister] = curRegisters[mutableRegister];
-            }
+            vm.registerRefs = oldRegisterRefs;
 
             return res
         }
@@ -245,7 +326,9 @@ const implOpcode = {
             fork.code = vm.code;
             fork.registers = vm.registers.slice();
             fork.regstack = [];
+            fork.registerRefs = new Map(vm.registerRefs);
             fork.adoptMemoryProtectionState(vm.memoryProtectionState);
+            bindCaptureReferences(fork);
             const restIndex = argOrder.length - 1;
             if (hasDynamicThis) {
                 fork.write(thisRegister, thisArg);
@@ -261,9 +344,6 @@ const implOpcode = {
             fork.registers[registers.INSTRUCTION_POINTER] = cur + fnOffset - 1;
             await fork.runAsync()
             const res = fork.read(returnDataStore);
-            for (const mutableRegister of mutableRegisters) {
-                vm.registers[mutableRegister] = fork.registers[mutableRegister];
-            }
             return res
         }
 
@@ -280,11 +360,14 @@ const implOpcode = {
         const internalReturnReg = this.readByte();
         const restoreRegisters = this.readArrayRegisters();
         const retValue = this.read(internalReturnReg);
-        const [oldRegisters, returnDataStore] = this.regstack.pop();
+        const [oldRegisters, returnDataStore, oldRegisterRefs] = this.regstack.pop();
 
         restoreRegisters.push(registers.INSTRUCTION_POINTER);
         for (const restoreRegister of restoreRegisters) {
             this.registers[restoreRegister] = oldRegisters[restoreRegister];
+        }
+        if (oldRegisterRefs) {
+            this.registerRefs = oldRegisterRefs;
         }
         this.write(returnDataStore, retValue);
     }, JUMP_UNCONDITIONAL: function () {
@@ -311,6 +394,20 @@ const implOpcode = {
         const cur = this.read(registers.INSTRUCTION_POINTER);
         const errorRegister = this.readByte();
         const catchOffset = this.readDWORD(), finallyOffset = this.readDWORD();
+        if (this.executionMode === "async") {
+            return (async () => {
+                try {
+                    await this.runAsync();
+                } catch (e) {
+                    this.write(errorRegister, e);
+                    this.registers[registers.INSTRUCTION_POINTER] = cur + catchOffset - 1;
+                    await this.runAsync();
+                } finally {
+                    this.registers[registers.INSTRUCTION_POINTER] = cur + finallyOffset - 1
+                    await this.runAsync();
+                }
+            })();
+        }
         try {
             this.run();
         } catch (e) {
@@ -337,6 +434,8 @@ const implOpcode = {
         const dest = this.readByte(), src = this.readByte();
         const ref = this.read(dest);
         ref.write(this.read(src));
+    }, DETACH_REF: function () {
+        this.detachRegisterReference(this.readByte());
     }, SET_NULL: function () {
         const dest = this.readByte();
         this.write(dest, null);
@@ -504,6 +603,8 @@ class JSVM {
         this.code = null
         this.bytecodeIntegrityKey = ""
         this.memoryProtectionState = null
+        this.registerRefs = new Map()
+        this.executionMode = "sync"
         this.registers[registers.INSTRUCTION_POINTER] = 0
         this.registers[registers.UNDEFINED] = undefined
         this.registers[registers.VOID] = 0
@@ -537,7 +638,7 @@ class JSVM {
         for (let register = registerNames.length; register < this.registers.length; register++) {
             existingValues.push({
                 register,
-                value: this.read(register)
+                value: this.readStored(register)
             });
         }
         this.memoryProtectionState = createMemoryProtectionState(key);
@@ -553,14 +654,14 @@ class JSVM {
         return !!(this.memoryProtectionState && this.memoryProtectionState.enabled && register >= registerNames.length);
     }
 
-    read(register) {
+    readStored(register) {
         if (!this.isProtectedRegister(register)) {
             return this.registers[register]
         }
         return restoreProtectedRegisterValue(this.memoryProtectionState, register, this.registers[register])
     }
 
-    write(register, value) {
+    writeStored(register, value) {
         if (reservedNames.has(registerNames[register])) {
             throw new Error(`Tried to modify reserved register: ${registerNames[register]} (${register})`)
         }
@@ -569,6 +670,48 @@ class JSVM {
             return
         }
         this.registers[register] = createProtectedRegisterValue(this.memoryProtectionState, register, value)
+    }
+
+    getOrCreateRegisterReference(register) {
+        if (this.registerRefs.has(register)) {
+            return this.registerRefs.get(register)
+        }
+        const reference = createRegisterReference(this.readStored(register))
+        this.registerRefs.set(register, reference)
+        return reference
+    }
+
+    bindRegisterReference(register, reference) {
+        this.registerRefs.set(register, reference)
+        return reference
+    }
+
+    detachRegisterReference(register) {
+        if (!this.registerRefs.has(register)) {
+            return null
+        }
+        const reference = this.registerRefs.get(register)
+        this.writeStored(register, reference.value)
+        this.registerRefs.delete(register)
+        return reference
+    }
+
+    read(register) {
+        if (this.registerRefs.has(register)) {
+            return this.registerRefs.get(register).value
+        }
+        return this.readStored(register)
+    }
+
+    write(register, value) {
+        if (reservedNames.has(registerNames[register])) {
+            throw new Error(`Tried to modify reserved register: ${registerNames[register]} (${register})`)
+        }
+        if (this.registerRefs.has(register)) {
+            this.registerRefs.get(register).value = value
+            return
+        }
+        this.writeStored(register, value)
     }
 
     readByte() {
@@ -651,10 +794,10 @@ class JSVM {
             this.code = code
             return
         }
-        const buffer = Buffer.from(code, format)
+        const buffer = decodeBytecodeBuffer(code, format)
         if (buffer[0] === 0x78 && buffer[1] === 0x9c) {
 
-            this.code = zlib.inflateSync(buffer)
+            this.code = inflateBytecode(buffer)
         } else {
             this.code = buffer
         }
@@ -668,6 +811,7 @@ class JSVM {
     }
 
     run() {
+        this.executionMode = "sync"
         while (true) {
             const opcode = this.readByte()
             if (opcode === undefined || opNames[opcode] === "END") {
@@ -686,6 +830,7 @@ class JSVM {
     }
 
     async runAsync() {
+        this.executionMode = "async"
         while (true) {
             const opcode = this.readByte()
             if (opcode === undefined || opNames[opcode] === "END") {
@@ -705,4 +850,8 @@ class JSVM {
     }
 }
 
-module.exports = JSVM
+if (typeof module !== "undefined" && module.exports) {
+    module.exports = JSVM
+} else if (typeof globalThis !== "undefined") {
+    globalThis.JSVM = JSVM
+}

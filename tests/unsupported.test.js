@@ -27,7 +27,7 @@ function toRunnableSource(code, decoratorsMode = "legacy") {
         new Function(code);
         return code;
     } catch (error) {
-        if (!String(error.message).includes("Invalid or unexpected token")) {
+        if (!(error instanceof SyntaxError)) {
             throw error;
         }
     }

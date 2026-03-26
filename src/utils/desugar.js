@@ -106,6 +106,13 @@ function buildPrivateFieldAssignmentExpression(expression, privateFields) {
     const valueCode = escodegen.generate(transformPrivateExpression(expression.right, privateFields));
 
     if (expression.operator === "=") {
+        if (info.kind === "accessor") {
+            return parseExpression(`((__privateObject, __privateValue) => {
+                ${buildPrivateSetCode(info, "__privateObject", "__privateValue")}
+                return __privateValue;
+            })(${objectCode}, ${valueCode})`);
+        }
+
         return parseExpression(`(() => {
             const __privateObject = ${objectCode};
             const __privateValue = ${valueCode};
@@ -115,6 +122,14 @@ function buildPrivateFieldAssignmentExpression(expression, privateFields) {
     }
 
     const operator = expression.operator.slice(0, -1);
+
+    if (info.kind === "accessor") {
+        return parseExpression(`((__privateObject, __privateOperand) => {
+            const __privateValue = ${buildPrivateGetCode(info, "__privateObject")} ${operator} __privateOperand;
+            ${buildPrivateSetCode(info, "__privateObject", "__privateValue")}
+            return __privateValue;
+        })(${objectCode}, ${valueCode})`);
+    }
 
     return parseExpression(`(() => {
         const __privateObject = ${objectCode};
@@ -131,6 +146,15 @@ function buildPrivateFieldUpdateExpression(expression, privateFields) {
     }
 
     const objectCode = escodegen.generate(transformPrivateExpression(expression.argument.object, privateFields));
+
+    if (info.kind === "accessor") {
+        return parseExpression(`((__privateObject) => {
+            const __privateCurrent = ${buildPrivateGetCode(info, "__privateObject")};
+            const __privateNext = __privateCurrent ${expression.operator === "++" ? "+" : "-"} 1;
+            ${buildPrivateSetCode(info, "__privateObject", "__privateNext")}
+            return ${expression.prefix ? "__privateNext" : "__privateCurrent"};
+        })(${objectCode})`);
+    }
 
     return parseExpression(`(() => {
         const __privateObject = ${objectCode};

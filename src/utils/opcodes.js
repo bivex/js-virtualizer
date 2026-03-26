@@ -99,7 +99,7 @@ const implOpcode = {
             returnDataStore = this.readByte(),
             argMap = this.readArrayRegisters();
         // store current register state for restoration
-        this.regstack.push([this.registers.slice(), returnDataStore]);
+        this.regstack.push([this.registers.slice(), returnDataStore, new Map(this.registerRefs)]);
         // convert current register positions (rel) to function necessary registers (abs)
         // (abs, rel, abs, rel, ...)
         for (let i = 0; i < argMap.length; i += 2) {
@@ -117,20 +117,30 @@ const implOpcode = {
             thisRegister = this.readByte(),
             useRest = this.readBool(),
             argArrayMapper = this.readArrayRegisters(),
-            argOrder = this.readArrayRegisters();
-        // we have to specify mutable registers, because it could lead to undefined behavior
-        // the mutability rules that applied when the function was set up by the transpiler are not guaranteed to be the same
-        // ie. it may accidentally overwrite a register that WAS available during compilation but is now being used by the transpiler
-        // somewhere else
-        // if we only allow variables captured by reference to be mutable, this should avoid the issue
-        // variables will always exist at a known, fixed location (until, of course, the scope changes), however temp loader
-        // registers are more volatile and often reused
-
-        const mutableRegisters = this.readArrayRegisters();
+            argOrder = this.readArrayRegisters(),
+            captureMappings = this.readArrayRegisters();
         const vm = this;
+        const captureReferences = [];
+
+        for (let i = 0; i < captureMappings.length; i += 2) {
+            const captureRegister = captureMappings[i];
+            const sourceRegister = captureMappings[i + 1];
+            const reference = vm.getOrCreateRegisterReference(sourceRegister);
+            captureReferences.push({
+                captureRegister,
+                reference
+            });
+        }
+
+        function bindCaptureReferences(target) {
+            for (const {captureRegister, reference} of captureReferences) {
+                target.bindRegisterReference(captureRegister, reference);
+            }
+        }
 
         function runSync(thisArg, args) {
-            vm.regstack.push([vm.registers.slice(), returnDataStore]);
+            vm.regstack.push([vm.registers.slice(), returnDataStore, new Map(vm.registerRefs)]);
+            bindCaptureReferences(vm);
             const restIndex = argOrder.length - 1;
             if (hasDynamicThis) {
                 vm.write(thisRegister, thisArg);
@@ -146,12 +156,9 @@ const implOpcode = {
             vm.registers[registers.INSTRUCTION_POINTER] = cur + fnOffset - 1;
             vm.run()
             const res = vm.read(returnDataStore);
-            const [oldRegisters] = vm.regstack.pop();
-            const curRegisters = vm.registers.slice();
+            const [oldRegisters, _, oldRegisterRefs] = vm.regstack.pop();
             vm.registers = oldRegisters;
-            for (const mutableRegister of mutableRegisters) {
-                vm.registers[mutableRegister] = curRegisters[mutableRegister];
-            }
+            vm.registerRefs = oldRegisterRefs;
             log(`Callback result: ${res}`)
             return res
         }
@@ -161,7 +168,9 @@ const implOpcode = {
             fork.code = vm.code;
             fork.registers = vm.registers.slice();
             fork.regstack = [];
+            fork.registerRefs = new Map(vm.registerRefs);
             fork.adoptMemoryProtectionState(vm.memoryProtectionState);
+            bindCaptureReferences(fork);
             const restIndex = argOrder.length - 1;
             if (hasDynamicThis) {
                 fork.write(thisRegister, thisArg);
@@ -177,9 +186,6 @@ const implOpcode = {
             fork.registers[registers.INSTRUCTION_POINTER] = cur + fnOffset - 1;
             await fork.runAsync()
             const res = fork.read(returnDataStore);
-            for (const mutableRegister of mutableRegisters) {
-                vm.registers[mutableRegister] = fork.registers[mutableRegister];
-            }
             log(`Async callback result: ${res}`)
             return res
         }
@@ -198,11 +204,14 @@ const implOpcode = {
         const internalReturnReg = this.readByte();
         const restoreRegisters = this.readArrayRegisters();
         const retValue = this.read(internalReturnReg);
-        const [oldRegisters, returnDataStore] = this.regstack.pop();
+        const [oldRegisters, returnDataStore, oldRegisterRefs] = this.regstack.pop();
 
         restoreRegisters.push(registers.INSTRUCTION_POINTER);
         for (const restoreRegister of restoreRegisters) {
             this.registers[restoreRegister] = oldRegisters[restoreRegister];
+        }
+        if (oldRegisterRefs) {
+            this.registerRefs = oldRegisterRefs;
         }
         this.write(returnDataStore, retValue);
     },
@@ -233,6 +242,22 @@ const implOpcode = {
         const cur = this.read(registers.INSTRUCTION_POINTER);
         const errorRegister = this.readByte();
         const catchOffset = this.readDWORD(), finallyOffset = this.readDWORD();
+
+        if (this.executionMode === "async") {
+            return (async () => {
+                try {
+                    await this.runAsync();
+                } catch (e) {
+                    this.write(errorRegister, e);
+                    this.registers[registers.INSTRUCTION_POINTER] = cur + catchOffset - 1;
+                    await this.runAsync();
+                } finally {
+                    this.registers[registers.INSTRUCTION_POINTER] = cur + finallyOffset - 1
+                    await this.runAsync();
+                }
+            })();
+        }
+
         try {
             this.run();
         } catch (e) {
@@ -264,6 +289,10 @@ const implOpcode = {
         const dest = this.readByte(), src = this.readByte();
         const ref = this.read(dest);
         ref.write(this.read(src));
+    },
+    DETACH_REF: function () {
+        const register = this.readByte();
+        this.detachRegisterReference(register);
     },
     SET_NULL: function () {
         const dest = this.readByte();

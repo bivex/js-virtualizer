@@ -108,6 +108,8 @@ const opNames = [
     "GET_INDEX",
     // [external_ref, src]
     "WRITE_EXT",
+    // [register]
+    "DETACH_REF",
     // [dest]
     "SET_NULL",
     // [dest]

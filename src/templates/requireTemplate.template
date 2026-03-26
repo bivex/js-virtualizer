@@ -1,1 +1,9 @@
-const JSVM = require("%VM_PATH%");
+const JSVM = typeof globalThis !== "undefined" && globalThis.JSVM
+    ? globalThis.JSVM
+    : typeof require === "function"
+        ? require("%VM_PATH%")
+        : null;
+
+if (!JSVM) {
+    throw new Error("JSVM runtime is not available");
+}

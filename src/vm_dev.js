@@ -136,6 +136,12 @@ function restoreProtectedRegisterValue(state, register, value) {
     return state.heap.get(token);
 }
 
+function createRegisterReference(value) {
+    return {
+        value
+    };
+}
+
 // compiler is expected to load all dependencies into registers prior to future execution
 // a JSVM instance. a new one should be created for every virtualized function so that they are able to run concurrently without interfering with each other
 class JSVM {
@@ -146,6 +152,8 @@ class JSVM {
         this.code = null
         this.bytecodeIntegrityKey = ""
         this.memoryProtectionState = null
+        this.registerRefs = new Map()
+        this.executionMode = "sync"
         this.registers[registers.INSTRUCTION_POINTER] = 0
         this.registers[registers.UNDEFINED] = undefined
         this.registers[registers.VOID] = 0
@@ -179,7 +187,7 @@ class JSVM {
         for (let register = registerNames.length; register < this.registers.length; register++) {
             existingValues.push({
                 register,
-                value: this.read(register)
+                value: this.readStored(register)
             })
         }
         this.memoryProtectionState = createMemoryProtectionState(key)
@@ -195,14 +203,14 @@ class JSVM {
         return !!(this.memoryProtectionState && this.memoryProtectionState.enabled && register >= registerNames.length)
     }
 
-    read(register) {
+    readStored(register) {
         if (!this.isProtectedRegister(register)) {
             return this.registers[register]
         }
         return restoreProtectedRegisterValue(this.memoryProtectionState, register, this.registers[register])
     }
 
-    write(register, value) {
+    writeStored(register, value) {
         if (reservedNames.has(registerNames[register])) {
             throw new Error(`Tried to modify reserved register: ${registerNames[register]} (${register})`)
         }
@@ -211,6 +219,48 @@ class JSVM {
             return
         }
         this.registers[register] = createProtectedRegisterValue(this.memoryProtectionState, register, value)
+    }
+
+    getOrCreateRegisterReference(register) {
+        if (this.registerRefs.has(register)) {
+            return this.registerRefs.get(register)
+        }
+        const reference = createRegisterReference(this.readStored(register))
+        this.registerRefs.set(register, reference)
+        return reference
+    }
+
+    bindRegisterReference(register, reference) {
+        this.registerRefs.set(register, reference)
+        return reference
+    }
+
+    detachRegisterReference(register) {
+        if (!this.registerRefs.has(register)) {
+            return null
+        }
+        const reference = this.registerRefs.get(register)
+        this.writeStored(register, reference.value)
+        this.registerRefs.delete(register)
+        return reference
+    }
+
+    read(register) {
+        if (this.registerRefs.has(register)) {
+            return this.registerRefs.get(register).value
+        }
+        return this.readStored(register)
+    }
+
+    write(register, value) {
+        if (reservedNames.has(registerNames[register])) {
+            throw new Error(`Tried to modify reserved register: ${registerNames[register]} (${register})`)
+        }
+        if (this.registerRefs.has(register)) {
+            this.registerRefs.get(register).value = value
+            return
+        }
+        this.writeStored(register, value)
     }
 
     readByte() {
@@ -314,6 +364,7 @@ class JSVM {
     }
 
     run() {
+        this.executionMode = "sync"
         while (true) {
             const opcode = this.readByte()
             if (opcode === undefined || opNames[opcode] === "END") {
@@ -337,6 +388,7 @@ class JSVM {
     }
 
     async runAsync() {
+        this.executionMode = "async"
         while (true) {
             const opcode = this.readByte()
             if (opcode === undefined || opNames[opcode] === "END") {
