@@ -17,6 +17,14 @@ const {shuffle} = require("../utils/random");
 const {opNames} = require("../utils/constants");
 const {log} = require("../utils/log");
 
+function findTopLevelVariable(vmAST, name) {
+    return vmAST.body.find((node) => {
+        return node.type === "VariableDeclaration" && node.declarations.some((declaration) => {
+            return declaration.id && declaration.id.name === name;
+        });
+    });
+}
+
 function obfuscateOpcodes(VMChunks, vmAST) {
     const usedOps = new Set()
 
@@ -51,7 +59,14 @@ function obfuscateOpcodes(VMChunks, vmAST) {
         })
     }
 
-    const opcodesArrayExpression = vmAST.body[2].declarations[0].init
+    const opNamesDeclaration = findTopLevelVariable(vmAST, "opNames")
+    if (!opNamesDeclaration) {
+        throw new Error("Failed to locate opNames declaration in VM AST");
+    }
+
+    const opcodesArrayExpression = opNamesDeclaration.declarations.find((declaration) => {
+        return declaration.id && declaration.id.name === "opNames";
+    }).init
     opcodesArrayExpression.elements = []
 
     for (let i = 0; i < newOpnames.length; i++) {

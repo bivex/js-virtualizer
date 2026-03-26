@@ -28,6 +28,7 @@ const escodegen = require("escodegen");
 const {log, LogData} = require("./utils/log");
 const zlib = require("node:zlib");
 const fs = require("node:fs");
+const JSVM = require("./vm_dev");
 const obfuscateCode = require("./postTranspilation/obfuscateCode");
 const obfuscateOpcodes = require("./postTranspilation/obfuscateOpcodes");
 const {desugarStatementList} = require("./utils/desugar");
@@ -134,6 +135,7 @@ async function transpile(code, options) {
     function virtualizeFunction(node) {
         log(new LogData(`Virtualizing Function "${node.id.name}"`, 'info', false));
         const dependencies = analyzeScope(ast, node);
+        const integrityKey = crypto.randomBytes(16).toString("hex");
         const usesThis = (() => {
             let found = false
             walk.simple(node.body, {
@@ -209,6 +211,7 @@ async function transpile(code, options) {
             .replace("%FUNCTION_NAME%", node.id.name)
             .replace("%ARGS%", params.join(","))
             .replace("%ENCODING%", encoding)
+            .replace("%BYTECODE_INTEGRITY_KEY%", integrityKey)
             .replace("%DEPENDENCIES%", JSON.stringify(regToDep).replace(/"/g, ""))
             .replace("%OUTPUT_REGISTER%", generator.outputRegister.toString())
             .replace("%RUNCMD%", node.async ? "await VM.runAsync()" : "VM.run()");
@@ -227,7 +230,8 @@ async function transpile(code, options) {
         rewriteQueue.push({
             result: virtualizedFunction,
             node,
-            chunk: generator.chunk
+            chunk: generator.chunk,
+            integrityKey
         })
     }
 
@@ -243,9 +247,11 @@ async function transpile(code, options) {
         obfuscateOpcodes(chunks, vmAST)
     }
 
-    rewriteQueue.forEach(({result, node, chunk}) => {
+    rewriteQueue.forEach(({result, node, chunk, integrityKey}) => {
         const bytecode = zlib.deflateSync(Buffer.from(chunk.toBytes())).toString(encoding);
-        result = result.replace("%BYTECODE%", bytecode);
+        const integritySalt = crypto.randomBytes(8).toString("hex");
+        const protectedBytecode = JSVM.createBytecodeIntegrityEnvelope(bytecode, encoding, integrityKey, integritySalt);
+        result = result.replace("%BYTECODE%", protectedBytecode);
         node.body.body = acorn.parse(result, {ecmaVersion: "latest", sourceType: "module"}).body[0].body.body
     })
 

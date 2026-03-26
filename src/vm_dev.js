@@ -18,6 +18,72 @@ const implOpcode = require("./utils/opcodes");
 const {log, LogData} = require("./utils/log");
 const zlib = require("node:zlib");
 
+const BYTECODE_INTEGRITY_PREFIX = "JSCI1";
+
+function rotateLeft(value, shift) {
+    return ((value << shift) | (value >>> (32 - shift))) >>> 0;
+}
+
+function createBytecodeIntegrityDigest(payload, salt, key, format) {
+    const normalizedPayload = String(payload ?? "");
+    const normalizedSalt = String(salt ?? "");
+    const normalizedKey = String(key ?? "");
+    const normalizedFormat = String(format ?? "");
+    const seed = `${normalizedSalt}:${normalizedFormat}:${normalizedPayload.length}:${normalizedKey.length}`;
+    const input = `${seed}:${normalizedPayload}`;
+    let a = (0x243f6a88 ^ input.length) >>> 0;
+    let b = (0x85a308d3 ^ normalizedSalt.length) >>> 0;
+    let c = (0x13198a2e ^ normalizedFormat.length) >>> 0;
+    let d = (0x03707344 ^ normalizedKey.length) >>> 0;
+
+    for (let i = 0; i < input.length; i++) {
+        const code = input.charCodeAt(i);
+        const keyCode = normalizedKey.length > 0 ? normalizedKey.charCodeAt(i % normalizedKey.length) : 0;
+        const saltCode = normalizedSalt.length > 0 ? normalizedSalt.charCodeAt(i % normalizedSalt.length) : 0;
+        a = Math.imul((a ^ (code + keyCode + i)) >>> 0, 0x45d9f3b) >>> 0;
+        b = rotateLeft((b + code + saltCode + i) >>> 0, 5);
+        b = Math.imul((b ^ a) >>> 0, 0x27d4eb2d) >>> 0;
+        c = rotateLeft((c ^ (b + code + keyCode)) >>> 0, 11);
+        c = Math.imul(c >>> 0, 0x165667b1) >>> 0;
+        d = rotateLeft((d + (code ^ c) + saltCode) >>> 0, 17);
+        d = Math.imul((d ^ a ^ keyCode) >>> 0, 0x9e3779b1) >>> 0;
+    }
+
+    a ^= b >>> 1;
+    b ^= c >>> 3;
+    c ^= d >>> 5;
+    d ^= a >>> 7;
+
+    return [a, b, c, d]
+        .map((part) => (part >>> 0).toString(16).padStart(8, "0"))
+        .join("");
+}
+
+function unpackBytecodeEnvelope(code, format, key) {
+    if (typeof code !== "string" || !code.startsWith(`${BYTECODE_INTEGRITY_PREFIX}:`)) {
+        return code;
+    }
+
+    const start = BYTECODE_INTEGRITY_PREFIX.length + 1;
+    const saltEnd = code.indexOf(":", start);
+    const digestEnd = saltEnd === -1 ? -1 : code.indexOf(":", saltEnd + 1);
+
+    if (saltEnd === -1 || digestEnd === -1) {
+        throw new Error("Malformed protected bytecode envelope");
+    }
+
+    const salt = code.slice(start, saltEnd);
+    const expectedDigest = code.slice(saltEnd + 1, digestEnd);
+    const payload = code.slice(digestEnd + 1);
+    const actualDigest = createBytecodeIntegrityDigest(payload, salt, key, format);
+
+    if (expectedDigest !== actualDigest) {
+        throw new Error("Bytecode integrity check failed");
+    }
+
+    return payload;
+}
+
 // compiler is expected to load all dependencies into registers prior to future execution
 // a JSVM instance. a new one should be created for every virtualized function so that they are able to run concurrently without interfering with each other
 class JSVM {
@@ -26,12 +92,28 @@ class JSVM {
         this.regstack = []
         this.opcodes = {}
         this.code = null
+        this.bytecodeIntegrityKey = ""
         this.registers[registers.INSTRUCTION_POINTER] = 0
         this.registers[registers.UNDEFINED] = undefined
         this.registers[registers.VOID] = 0
         Object.keys(opcodes).forEach((opcode) => {
             this.opcodes[opcodes[opcode]] = implOpcode[opcode].bind(this)
         })
+    }
+
+    static createBytecodeIntegrityDigest(code, salt, key, format) {
+        return createBytecodeIntegrityDigest(code, salt, key, format)
+    }
+
+    static createBytecodeIntegrityEnvelope(code, format, key, salt) {
+        const normalizedSalt = String(salt ?? "");
+        const digest = createBytecodeIntegrityDigest(code, normalizedSalt, key, format);
+        return `${BYTECODE_INTEGRITY_PREFIX}:${normalizedSalt}:${digest}:${code}`;
+    }
+
+    setBytecodeIntegrityKey(key) {
+        this.bytecodeIntegrityKey = String(key ?? "")
+        return this
     }
 
     read(register) {
@@ -123,6 +205,7 @@ class JSVM {
     }
 
     loadFromString(code, format) {
+        code = unpackBytecodeEnvelope(code, format, this.bytecodeIntegrityKey)
         if (!format) {
             // assume buffer
             this.code = code

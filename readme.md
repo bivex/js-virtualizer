@@ -77,6 +77,8 @@ main();
   - `ObfuscateVM` - whether or not to obfuscate the VM code through js-confuser
   - `ObfuscateTranspiled` - whether or not to obfuscate the transpiled code through js-confuser
 
+Generated virtualized wrappers now protect embedded bytecode with a per-function integrity envelope. If the protected payload is modified, the VM throws before decompression and execution.
+
 ## Support Matrix
 
 ### Supported
@@ -132,6 +134,7 @@ main();
 | Classes | decorators | ✅ | supported through Babel preprocessing before Acorn parsing in both `legacy` and standard (`2023-11`) modes |
 | Classes | inheritance | ✅ | |
 | Classes | `super()` and `super.method()` | ✅ | constructor, instance, and static method cases |
+| Obfuscation | bytecode integrity checks | ✅ | protected bytecode envelopes detect payload tampering before decompression/execution |
 
 ### Partially Supported
 
@@ -150,7 +153,6 @@ main();
 | Obfuscation | string encryption | ❌ | not implemented |
 | Obfuscation | dead code injection | ❌ | not implemented |
 | Obfuscation | VM memory protection | ❌ | register encryption / JIT restore not implemented |
-| Obfuscation | bytecode integrity checks | ❌ | not implemented |
 
 ## Limitations
 
@@ -163,3 +165,4 @@ main();
 - given the virtual machine, the virtualized function is pretty trivial to reverse engineer. it is recommended that the virtual machine class is obfuscated before use
 - decorator syntax is preprocessed through Babel before Acorn parsing. both `legacy` and standard (`2023-11`) decorator transforms are covered
 - opcode shuffling/minification exists, but deeper obfuscation layers are still incomplete
+- bytecode integrity checks now detect tampering of the protected payload, but they are still not a full anti-patching system if an attacker can freely modify both the wrapper and the VM runtime
