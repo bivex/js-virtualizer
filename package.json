@@ -18,7 +18,8 @@
   "scripts": {
     "test": "jest --runInBand",
     "test:transpiler": "jest tests/transpiler.test.js --runInBand",
-    "audit": "bun audit"
+    "audit": "bun audit",
+    "demo:fingerprint": "bun examples/fingerprint.js"
   },
   "jest": {
     "transform": {}
