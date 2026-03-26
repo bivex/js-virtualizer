@@ -19,7 +19,8 @@
     "test": "jest --runInBand",
     "test:transpiler": "jest tests/transpiler.test.js --runInBand",
     "audit": "bun audit",
-    "demo:fingerprint": "bun examples/fingerprint.js"
+    "demo:fingerprint": "bun examples/fingerprint.js",
+    "demo:fingerprint:browser": "bun examples/browserFingerprint.js"
   },
   "jest": {
     "transform": {}

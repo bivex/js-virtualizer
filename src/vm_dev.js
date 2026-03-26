@@ -1,3 +1,18 @@
+/**
+ * Copyright (c) 2026 Bivex
+ *
+ * Author: Bivex
+ * Available for contact via email: support@b-b.top
+ * For up-to-date contact information:
+ * https://github.com/bivex
+ *
+ * Created: 2026-03-26 18:43
+ * Last Updated: 2026-03-26 18:43
+ *
+ * Licensed under the MIT License.
+ * Commercial licensing available upon request.
+ */
+
 const {registers, opcodes, opNames, registerNames, reservedNames} = require("./utils/constants");
 const implOpcode = require("./utils/opcodes");
 const {log, LogData} = require("./utils/log");
