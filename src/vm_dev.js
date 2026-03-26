@@ -199,7 +199,7 @@ class JSVM {
         const length = this.readDWORD()
         let str = ''
         for (let i = 0; i < length; i++) {
-            str += String.fromCharCode(this.readByte())
+            str += String.fromCharCode(this.readByte() ^ ((length * 31 + i * 17) & 0xFF))
         }
         return str
     }

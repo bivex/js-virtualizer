@@ -116,7 +116,8 @@ const implOpcode = {
             hasDynamicThis = this.readBool(),
             thisRegister = this.readByte(),
             useRest = this.readBool(),
-            argArrayMapper = this.readArrayRegisters();
+            argArrayMapper = this.readArrayRegisters(),
+            argOrder = this.readArrayRegisters();
         // we have to specify mutable registers, because it could lead to undefined behavior
         // the mutability rules that applied when the function was set up by the transpiler are not guaranteed to be the same
         // ie. it may accidentally overwrite a register that WAS available during compilation but is now being used by the transpiler
@@ -130,15 +131,17 @@ const implOpcode = {
 
         function runSync(thisArg, args) {
             vm.regstack.push([vm.registers.slice(), returnDataStore]);
+            const restIndex = argOrder.length - 1;
             if (hasDynamicThis) {
                 vm.write(thisRegister, thisArg);
             }
             for (let i = 0; i < argArrayMapper.length; i++) {
-                if (useRest && i === argArrayMapper.length - 1) {
-                    vm.write(argArrayMapper[i], args.slice(i));
-                    break;
+                const sourceIndex = argOrder[i];
+                if (useRest && sourceIndex === restIndex) {
+                    vm.write(argArrayMapper[i], args.slice(sourceIndex));
+                    continue;
                 }
-                vm.write(argArrayMapper[i], args[i]);
+                vm.write(argArrayMapper[i], args[sourceIndex]);
             }
             vm.registers[registers.INSTRUCTION_POINTER] = cur + fnOffset - 1;
             vm.run()
@@ -158,15 +161,17 @@ const implOpcode = {
             fork.code = vm.code;
             fork.registers = vm.registers.slice();
             fork.regstack = [];
+            const restIndex = argOrder.length - 1;
             if (hasDynamicThis) {
                 fork.write(thisRegister, thisArg);
             }
             for (let i = 0; i < argArrayMapper.length; i++) {
-                if (useRest && i === argArrayMapper.length - 1) {
-                    fork.write(argArrayMapper[i], args.slice(i));
-                    break;
+                const sourceIndex = argOrder[i];
+                if (useRest && sourceIndex === restIndex) {
+                    fork.write(argArrayMapper[i], args.slice(sourceIndex));
+                    continue;
                 }
-                fork.write(argArrayMapper[i], args[i]);
+                fork.write(argArrayMapper[i], args[sourceIndex]);
             }
             fork.registers[registers.INSTRUCTION_POINTER] = cur + fnOffset - 1;
             await fork.runAsync()

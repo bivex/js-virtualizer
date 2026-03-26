@@ -190,9 +190,14 @@ function encodeDWORD(dword) {
 }
 
 function encodeString(str) {
-    const length = str.length
     const data = Buffer.from(str);
-    return Buffer.concat([encodeDWORD(length), data]);
+    const encrypted = Buffer.alloc(data.length);
+
+    for (let i = 0; i < data.length; i++) {
+        encrypted[i] = data[i] ^ ((data.length * 31 + i * 17) & 0xFF);
+    }
+
+    return Buffer.concat([encodeDWORD(encrypted.length), encrypted]);
 }
 
 function encodeArray(array, offset) {

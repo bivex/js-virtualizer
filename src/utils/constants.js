@@ -70,8 +70,9 @@ const opNames = [
     // argmap should be a list of functionreg: argreg
     // [offset, return_data_store_external, ...argmap]
     "VFUNC_CALL",
-    // argmaparray should be a list of [1st argument destination, 2nd argument destination, ...]
-    // [offset, dest, return_data_store_external, ...argmaparray]
+    // argmaparray should be a list of [scrambled 1st destination, scrambled 2nd destination, ...]
+    // argorderarray maps each scrambled destination back to the original argument index
+    // [offset, dest, return_data_store_external, ...argmaparray, ...argorderarray]
     "VFUNC_SETUP_CALLBACK",
     // do_restore is an array of registers that should be restored after vfunc completion
     // for example, registers that held mapped arguments

@@ -32,6 +32,7 @@ const JSVM = require("./vm_dev");
 const obfuscateCode = require("./postTranspilation/obfuscateCode");
 const obfuscateOpcodes = require("./postTranspilation/obfuscateOpcodes");
 const {desugarStatementList} = require("./utils/desugar");
+const {shuffle} = require("./utils/random");
 
 const vmDist = fs.readFileSync(path.join(__dirname, './vm_dist.js'), 'utf-8');
 const encodings = ['base64']
@@ -66,6 +67,31 @@ function preprocessDecorators(code, decoratorsMode) {
     }
 
     return transformed.code;
+}
+
+function createArgumentScramblingPlan(paramNames) {
+    if (paramNames.length === 0) {
+        return {
+            aliasSetup: "",
+            aliasesByParam: {}
+        };
+    }
+
+    const aliasesByParam = {};
+    const declarationOrder = shuffle(Array.from({length: paramNames.length}, (_, index) => index));
+    const declarations = [];
+
+    for (const index of declarationOrder) {
+        const paramName = paramNames[index];
+        const alias = `__jsv_arg_${crypto.randomBytes(4).toString("hex")}`;
+        aliasesByParam[paramName] = alias;
+        declarations.push(`const ${alias} = ${paramName};`);
+    }
+
+    return {
+        aliasSetup: declarations.join(""),
+        aliasesByParam
+    };
 }
 
 async function transpile(code, options) {
@@ -203,6 +229,13 @@ async function transpile(code, options) {
             }
         }
 
+        const {aliasSetup, aliasesByParam} = createArgumentScramblingPlan(params);
+        Object.keys(regToDep).forEach((register) => {
+            if (aliasesByParam[regToDep[register]]) {
+                regToDep[register] = aliasesByParam[regToDep[register]];
+            }
+        });
+
         generator.generate();
         chunks.push(generator.chunk)
 
@@ -210,6 +243,7 @@ async function transpile(code, options) {
             .replace("%FN_PREFIX%", node.async ? "async " : "")
             .replace("%FUNCTION_NAME%", node.id.name)
             .replace("%ARGS%", params.join(","))
+            .replace("%ARG_SCRAMBLE_SETUP%", aliasSetup)
             .replace("%ENCODING%", encoding)
             .replace("%BYTECODE_INTEGRITY_KEY%", integrityKey)
             .replace("%DEPENDENCIES%", JSON.stringify(regToDep).replace(/"/g, ""))

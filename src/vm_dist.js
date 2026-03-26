@@ -162,7 +162,7 @@ const implOpcode = {
     }, VFUNC_SETUP_CALLBACK: function () {
         const cur = this.read(registers.INSTRUCTION_POINTER);
         const fnOffset = this.readDWORD(), dest = this.readByte(), returnDataStore = this.readByte(),
-            isAsync = this.readBool(), hasDynamicThis = this.readBool(), thisRegister = this.readByte(), useRest = this.readBool(), argArrayMapper = this.readArrayRegisters();
+            isAsync = this.readBool(), hasDynamicThis = this.readBool(), thisRegister = this.readByte(), useRest = this.readBool(), argArrayMapper = this.readArrayRegisters(), argOrder = this.readArrayRegisters();
 
 
         const mutableRegisters = this.readArrayRegisters();
@@ -170,15 +170,17 @@ const implOpcode = {
 
         function runSync(thisArg, args) {
             vm.regstack.push([vm.registers.slice(), returnDataStore]);
+            const restIndex = argOrder.length - 1;
             if (hasDynamicThis) {
                 vm.write(thisRegister, thisArg);
             }
             for (let i = 0; i < argArrayMapper.length; i++) {
-                if (useRest && i === argArrayMapper.length - 1) {
-                    vm.write(argArrayMapper[i], args.slice(i));
-                    break;
+                const sourceIndex = argOrder[i];
+                if (useRest && sourceIndex === restIndex) {
+                    vm.write(argArrayMapper[i], args.slice(sourceIndex));
+                    continue;
                 }
-                vm.write(argArrayMapper[i], args[i]);
+                vm.write(argArrayMapper[i], args[sourceIndex]);
             }
             vm.registers[registers.INSTRUCTION_POINTER] = cur + fnOffset - 1;
             vm.run()
@@ -198,15 +200,17 @@ const implOpcode = {
             fork.code = vm.code;
             fork.registers = vm.registers.slice();
             fork.regstack = [];
+            const restIndex = argOrder.length - 1;
             if (hasDynamicThis) {
                 fork.write(thisRegister, thisArg);
             }
             for (let i = 0; i < argArrayMapper.length; i++) {
-                if (useRest && i === argArrayMapper.length - 1) {
-                    fork.write(argArrayMapper[i], args.slice(i));
-                    break;
+                const sourceIndex = argOrder[i];
+                if (useRest && sourceIndex === restIndex) {
+                    fork.write(argArrayMapper[i], args.slice(sourceIndex));
+                    continue;
                 }
-                fork.write(argArrayMapper[i], args[i]);
+                fork.write(argArrayMapper[i], args[sourceIndex]);
             }
             fork.registers[registers.INSTRUCTION_POINTER] = cur + fnOffset - 1;
             await fork.runAsync()
@@ -555,7 +559,7 @@ class JSVM {
         const length = this.readDWORD()
         let str = ''
         for (let i = 0; i < length; i++) {
-            str += String.fromCharCode(this.readByte())
+            str += String.fromCharCode(this.readByte() ^ ((length * 31 + i * 17) & 0xFF))
         }
         return str
     }
