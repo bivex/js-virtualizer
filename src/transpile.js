@@ -24,6 +24,7 @@ const functionWrapperTemplate = readFileSync(path.join(__dirname, "./templates/f
 const requireTemplate = readFileSync(path.join(__dirname, "./templates/requireTemplate.template"), "utf-8");
 const crypto = require("crypto");
 const {FunctionBytecodeGenerator} = require("./utils/BytecodeGenerator");
+const {Opcode, encodeDWORD, encodeString} = require("./utils/assembler");
 const escodegen = require("escodegen");
 const {log, LogData} = require("./utils/log");
 const zlib = require("node:zlib");
@@ -94,9 +95,45 @@ function createArgumentScramblingPlan(paramNames) {
     };
 }
 
+function createDeadCodeSequence() {
+    const registers = Array.from({length: 6}, () => crypto.randomInt(16, 220));
+    const [counterRegister, oneRegister, stringRegister, arrayRegister, numberRegister, flagRegister] = registers;
+    const baitLabel = `__dead_${crypto.randomBytes(4).toString("hex")}`;
+    const baitNumber = crypto.randomInt(256, 65535);
+
+    return [
+        new Opcode("LOAD_DWORD", counterRegister, encodeDWORD(0)),
+        new Opcode("LOAD_DWORD", oneRegister, encodeDWORD(1)),
+        new Opcode("LOAD_STRING", stringRegister, encodeString(baitLabel)),
+        new Opcode("SETUP_ARRAY", arrayRegister, encodeDWORD(2)),
+        new Opcode("SET_INDEX", arrayRegister, counterRegister, stringRegister),
+        new Opcode("ADD", counterRegister, counterRegister, oneRegister),
+        new Opcode("LOAD_DWORD", numberRegister, encodeDWORD(baitNumber)),
+        new Opcode("SET_INDEX", arrayRegister, counterRegister, numberRegister),
+        new Opcode("TEST", flagRegister, numberRegister),
+        new Opcode("NOP")
+    ];
+}
+
+function injectDeadCode(chunk) {
+    const decoySequence = createDeadCodeSequence();
+    const decoyLength = decoySequence.reduce((total, opcode) => total + opcode.toBytes().length, 0);
+
+    if (chunk.code.length === 0 || chunk.code[chunk.code.length - 1].name !== "END") {
+        chunk.append(new Opcode("JUMP_UNCONDITIONAL", encodeDWORD(5 + decoyLength)));
+        decoySequence.forEach((opcode) => chunk.append(opcode));
+        chunk.append(new Opcode("END"));
+        return;
+    }
+
+    decoySequence.forEach((opcode) => chunk.append(opcode));
+}
+
 async function transpile(code, options) {
     options = options ?? {};
     options.decoratorsMode = options.decoratorsMode ?? "legacy";
+    options.deadCodeInjection = options.deadCodeInjection ?? true;
+    options.memoryProtection = options.memoryProtection ?? true;
     options.fileName = options.fileName ?? crypto.randomBytes(8).toString('hex')
     options.writeOutput = options.writeOutput ?? true;
     options.vmOutputPath = options.vmOutputPath ?? path.join(__dirname, `../output/${options.fileName}.vm.js`);
@@ -162,6 +199,7 @@ async function transpile(code, options) {
         log(new LogData(`Virtualizing Function "${node.id.name}"`, 'info', false));
         const dependencies = analyzeScope(ast, node);
         const integrityKey = crypto.randomBytes(16).toString("hex");
+        const memoryProtectionKey = crypto.randomBytes(16).toString("hex");
         const usesThis = (() => {
             let found = false
             walk.simple(node.body, {
@@ -237,6 +275,9 @@ async function transpile(code, options) {
         });
 
         generator.generate();
+        if (options.deadCodeInjection) {
+            injectDeadCode(generator.chunk);
+        }
         chunks.push(generator.chunk)
 
         const virtualizedFunction = functionWrapperTemplate
@@ -244,6 +285,7 @@ async function transpile(code, options) {
             .replace("%FUNCTION_NAME%", node.id.name)
             .replace("%ARGS%", params.join(","))
             .replace("%ARG_SCRAMBLE_SETUP%", aliasSetup)
+            .replace("%MEMORY_PROTECTION_SETUP%", options.memoryProtection ? `VM.enableMemoryProtection('${memoryProtectionKey}');` : "")
             .replace("%ENCODING%", encoding)
             .replace("%BYTECODE_INTEGRITY_KEY%", integrityKey)
             .replace("%DEPENDENCIES%", JSON.stringify(regToDep).replace(/"/g, ""))

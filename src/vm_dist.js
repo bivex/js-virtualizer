@@ -81,6 +81,51 @@ function unpackBytecodeEnvelope(code, format, key) {
     return payload;
 }
 
+function createMemoryProtectionState(key) {
+    const normalizedKey = String(key ?? "");
+    let seed = 0x9e3779b9;
+    for (let i = 0; i < normalizedKey.length; i++) {
+        seed = Math.imul((seed ^ normalizedKey.charCodeAt(i)) >>> 0, 0x45d9f3b) >>> 0;
+    }
+    return {
+        enabled: true,
+        seed,
+        heap: new Map(),
+        nextToken: 1
+    };
+}
+
+function createRegisterProtectionMask(seed, register) {
+    return rotateLeft((seed ^ Math.imul(register + 1, 0x9e3779b1)) >>> 0, register % 29 + 3);
+}
+
+function createProtectedRegisterValue(state, register, value) {
+    const token = state.nextToken++;
+    state.heap.set(token, value);
+    const maskedToken = (token ^ createRegisterProtectionMask(state.seed, register)) >>> 0;
+    const guard = rotateLeft((maskedToken ^ state.seed ^ register) >>> 0, 11);
+    return Object.freeze({
+        __jsvmProtected: true,
+        token: maskedToken,
+        guard
+    });
+}
+
+function restoreProtectedRegisterValue(state, register, value) {
+    if (!value || value.__jsvmProtected !== true) {
+        return value;
+    }
+    const expectedGuard = rotateLeft((value.token ^ state.seed ^ register) >>> 0, 11);
+    if (value.guard !== expectedGuard) {
+        throw new Error("VM register protection check failed");
+    }
+    const token = (value.token ^ createRegisterProtectionMask(state.seed, register)) >>> 0;
+    if (!state.heap.has(token)) {
+        throw new Error("VM register protection token missing");
+    }
+    return state.heap.get(token);
+}
+
 const registerNames = ["INSTRUCTION_POINTER", "UNDEFINED", "VOID"]
 const opNames = ["LOAD_BYTE", "LOAD_BOOL", "LOAD_DWORD", "LOAD_FLOAT", "LOAD_STRING", "LOAD_ARRAY", "LOAD_OBJECT", "SETUP_OBJECT", "SETUP_ARRAY", "INIT_CONSTRUCTOR", "FUNC_CALL", "FUNC_ARRAY_CALL", "FUNC_ARRAY_CALL_AWAIT", "AWAIT", "VFUNC_CALL", "VFUNC_SETUP_CALLBACK", "VFUNC_RETURN", "JUMP_UNCONDITIONAL", "JUMP_EQ", "JUMP_NOT_EQ", "TRY_CATCH_FINALLY", "THROW", "THROW_ARGUMENT", "SET", "SET_REF", "SET_PROP", "GET_PROP", "SET_INDEX", "GET_INDEX", "WRITE_EXT", "SET_NULL", "SET_UNDEFINED", "EQ_COERCE", "EQ", "NOT_EQ_COERCE", "NOT_EQ", "LESS_THAN", "LESS_THAN_EQ", "GREATER_THAN", "GREATER_THAN_EQ", "TEST", "TEST_NEQ", "ADD", "SUBTRACT", "MULTIPLY", "DIVIDE", "MODULO", "POWER", "AND", "BNOT", "OR", "XOR", "SHIFT_LEFT", "SHIFT_RIGHT", "SPREAD", "SPREAD_INTO", "NOT", "NEGATE", "PLUS", "INCREMENT", "DECREMENT", "TYPEOF", "VOID", "DELETE", "LOGICAL_AND", "LOGICAL_OR", "LOGICAL_NULLISH", "GET_ITERATOR", "ITERATOR_NEXT", "ITERATOR_DONE", "ITERATOR_VALUE", "GET_PROPERTIES", "NOP", "END", "PRINT"]
 
@@ -200,6 +245,7 @@ const implOpcode = {
             fork.code = vm.code;
             fork.registers = vm.registers.slice();
             fork.regstack = [];
+            fork.adoptMemoryProtectionState(vm.memoryProtectionState);
             const restIndex = argOrder.length - 1;
             if (hasDynamicThis) {
                 fork.write(thisRegister, thisArg);
@@ -457,6 +503,7 @@ class JSVM {
         this.opcodes = {}
         this.code = null
         this.bytecodeIntegrityKey = ""
+        this.memoryProtectionState = null
         this.registers[registers.INSTRUCTION_POINTER] = 0
         this.registers[registers.UNDEFINED] = undefined
         this.registers[registers.VOID] = 0
@@ -480,15 +527,48 @@ class JSVM {
         return this
     }
 
+    adoptMemoryProtectionState(state) {
+        this.memoryProtectionState = state ?? null;
+        return this;
+    }
+
+    enableMemoryProtection(key) {
+        const existingValues = [];
+        for (let register = registerNames.length; register < this.registers.length; register++) {
+            existingValues.push({
+                register,
+                value: this.read(register)
+            });
+        }
+        this.memoryProtectionState = createMemoryProtectionState(key);
+        existingValues.forEach(({register, value}) => {
+            if (value !== null) {
+                this.registers[register] = createProtectedRegisterValue(this.memoryProtectionState, register, value);
+            }
+        });
+        return this;
+    }
+
+    isProtectedRegister(register) {
+        return !!(this.memoryProtectionState && this.memoryProtectionState.enabled && register >= registerNames.length);
+    }
+
     read(register) {
-        return this.registers[register]
+        if (!this.isProtectedRegister(register)) {
+            return this.registers[register]
+        }
+        return restoreProtectedRegisterValue(this.memoryProtectionState, register, this.registers[register])
     }
 
     write(register, value) {
         if (reservedNames.has(registerNames[register])) {
             throw new Error(`Tried to modify reserved register: ${registerNames[register]} (${register})`)
         }
-        this.registers[register] = value
+        if (!this.isProtectedRegister(register)) {
+            this.registers[register] = value
+            return
+        }
+        this.registers[register] = createProtectedRegisterValue(this.memoryProtectionState, register, value)
     }
 
     readByte() {

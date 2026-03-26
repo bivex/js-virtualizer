@@ -1,4 +1,4 @@
 %FN_PREFIX%function %FUNCTION_NAME%(%ARGS%) {
-    %ARG_SCRAMBLE_SETUP%const VM = new JSVM();VM.setBytecodeIntegrityKey('%BYTECODE_INTEGRITY_KEY%');VM.loadFromString('%BYTECODE%', '%ENCODING%');VM.loadDependencies(%DEPENDENCIES%);%RUNCMD%;
-    return VM.registers[%OUTPUT_REGISTER%];
+    %ARG_SCRAMBLE_SETUP%const VM = new JSVM();%MEMORY_PROTECTION_SETUP%VM.setBytecodeIntegrityKey('%BYTECODE_INTEGRITY_KEY%');VM.loadFromString('%BYTECODE%', '%ENCODING%');VM.loadDependencies(%DEPENDENCIES%);%RUNCMD%;
+    return VM.read(%OUTPUT_REGISTER%);
 }

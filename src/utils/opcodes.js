@@ -161,6 +161,7 @@ const implOpcode = {
             fork.code = vm.code;
             fork.registers = vm.registers.slice();
             fork.regstack = [];
+            fork.adoptMemoryProtectionState(vm.memoryProtectionState);
             const restIndex = argOrder.length - 1;
             if (hasDynamicThis) {
                 fork.write(thisRegister, thisArg);

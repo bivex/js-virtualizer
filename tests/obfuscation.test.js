@@ -22,6 +22,26 @@ const JSVM = require("../src/vm_dev");
 const {transpile} = require("../src/transpile");
 const {VMChunk, Opcode, encodeString} = require("../src/utils/assembler");
 
+function extractWrapperValue(pattern, source) {
+    const match = source.match(pattern);
+    if (!match) {
+        throw new Error(`Failed to extract ${pattern}`);
+    }
+    return match[1];
+}
+
+function decodeEmbeddedBytecode(transpiledSource) {
+    const integrityKey = extractWrapperValue(/setBytecodeIntegrityKey\('([^']+)'\)/, transpiledSource);
+    const protectedBytecode = extractWrapperValue(/loadFromString\('([^']+)',\s*'[^']+'\)/, transpiledSource);
+    const encoding = extractWrapperValue(/loadFromString\('[^']+',\s*'([^']+)'\)/, transpiledSource);
+    const vm = new JSVM();
+
+    vm.setBytecodeIntegrityKey(integrityKey);
+    vm.loadFromString(protectedBytecode, encoding);
+
+    return vm.code;
+}
+
 describe("obfuscation features", () => {
     test("encrypts string payloads in bytecode while preserving runtime behavior", () => {
         const secret = "ultra-secret-token";
@@ -126,5 +146,55 @@ console.log(demo());
 
         expect(result.transpiled).not.toContain(secret);
         expect(result.vm).not.toContain(secret);
+    });
+
+    test("protects register storage and restores values on read", () => {
+        const vm = new JSVM().enableMemoryProtection("memory-guard");
+        const marker = {kind: "probe"};
+
+        vm.write(7, marker);
+        vm.write(8, "masked-value");
+
+        expect(vm.registers[7]).not.toBe(marker);
+        expect(vm.registers[8]).not.toBe("masked-value");
+        expect(vm.read(7)).toBe(marker);
+        expect(vm.read(8)).toBe("masked-value");
+
+        vm.registers[8] = {
+            ...vm.registers[8],
+            guard: vm.registers[8].guard ^ 1
+        };
+
+        expect(() => vm.read(8)).toThrow("VM register protection check failed");
+    });
+
+    test("injects dead bytecode by default and allows disabling it", async () => {
+        const source = `
+// @virtualize
+function demo() {
+  return 42;
+}
+
+console.log(demo());
+`;
+
+        const withDeadCode = await transpile(source, {
+            fileName: "dead-code-default.js",
+            writeOutput: false,
+            passes: ["RemoveUnused"]
+        });
+
+        const withoutDeadCode = await transpile(source, {
+            fileName: "dead-code-disabled.js",
+            writeOutput: false,
+            passes: ["RemoveUnused"],
+            deadCodeInjection: false
+        });
+
+        const defaultBytecode = decodeEmbeddedBytecode(withDeadCode.transpiled);
+        const plainBytecode = decodeEmbeddedBytecode(withoutDeadCode.transpiled);
+
+        expect(defaultBytecode.length).toBeGreaterThan(plainBytecode.length);
+        expect(withDeadCode.transpiled).toContain("enableMemoryProtection");
     });
 });

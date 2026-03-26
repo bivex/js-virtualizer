@@ -72,12 +72,15 @@ main();
 - `writeOutput` (bool, default `true`) - whether or not the transpiler should directly write the output to a file
 - `vmOutputPath` (string, default: `node_modules/js-virtualizer/output/[name].js`) - the path to write the vm for the transpiled code to
 - `transpiledOutputPath` (string, default: `node_modules/js-virtualizer/output/[name].virtualized.js`) - the path to write the transpiled code to
+- `deadCodeInjection` (bool, default `true`) - whether or not unreachable decoy bytecode should be appended to the protected payload
+- `memoryProtection` (bool, default `true`) - whether or not generated wrappers should enable protected VM register storage before execution
 - `passes` (array, default: `["RemoveUnused", "ObfuscateVM", "ObfuscateTranspiled"]`) - an array of passes to apply to the result before returning and writing to a file
   - `RemoveUnused` - whether or not to remove unused opcodes from the instruction set
   - `ObfuscateVM` - whether or not to obfuscate the VM code through js-confuser
   - `ObfuscateTranspiled` - whether or not to obfuscate the transpiled code through js-confuser
 
 Generated virtualized wrappers now protect embedded bytecode with a per-function integrity envelope. If the protected payload is modified, the VM throws before decompression and execution.
+Generated virtualized wrappers also enable protected register storage and dead bytecode injection by default.
 
 ## Support Matrix
 
@@ -137,6 +140,8 @@ Generated virtualized wrappers now protect embedded bytecode with a per-function
 | Obfuscation | bytecode integrity checks | ✅ | protected bytecode envelopes detect payload tampering before decompression/execution |
 | Obfuscation | argument scrambling | ✅ | virtualized wrappers and internal VM callbacks load arguments through randomized aliases/order mappings |
 | Obfuscation | string encryption | ✅ | bytecode string payloads are encrypted before embedding and decoded inside the VM at load time |
+| Obfuscation | dead code injection | ✅ | transpiled bytecode gets unreachable decoy instruction tails by default |
+| Obfuscation | VM memory protection | ✅ | generated wrappers enable protected register storage with on-read restoration |
 
 ### Partially Supported
 
@@ -151,8 +156,6 @@ Generated virtualized wrappers now protect embedded bytecode with a per-function
 | Area | Feature | Status | Notes |
 | --- | --- | --- | --- |
 | Classes | remaining advanced class syntax | ❌ | now mostly narrowed to parser-level proposals and untested proposal-era edge cases outside the current matrix |
-| Obfuscation | dead code injection | ❌ | not implemented |
-| Obfuscation | VM memory protection | ❌ | register encryption / JIT restore not implemented |
 
 ## Limitations
 
@@ -164,5 +167,5 @@ Generated virtualized wrappers now protect embedded bytecode with a per-function
 - performance is not guaranteed. js-virtualizer is not intended for use in high-performance applications. it is intended for use in applications where you need to protect your code from reverse engineering. For instance, an express server with a virtualized function using for loops handled about 50% of the requests of the non-virtualized counterpart. You can find the implementation in the samples folder and test it out for yourself
 - given the virtual machine, the virtualized function is pretty trivial to reverse engineer. it is recommended that the virtual machine class is obfuscated before use
 - decorator syntax is preprocessed through Babel before Acorn parsing. both `legacy` and standard (`2023-11`) decorator transforms are covered
-- opcode shuffling/minification exists, bytecode strings are encrypted, and argument loading is scrambled, but deeper anti-analysis layers are still incomplete
+- opcode shuffling/minification exists, bytecode strings are encrypted, argument loading is scrambled, and transpiled payloads carry dead-code tails plus protected register storage, but deeper anti-analysis layers are still incomplete
 - bytecode integrity checks now detect tampering of the protected payload, but they are still not a full anti-patching system if an attacker can freely modify both the wrapper and the VM runtime
