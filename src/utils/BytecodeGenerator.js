@@ -424,6 +424,11 @@ class FunctionBytecodeGenerator {
                         });
                         this.chunk.append(new Opcode('SET_REF', this.getVariable(declaration.id.name), out));
                         if (needsCleanup(declaration.init)) this.freeTempLoad(out)
+                    } else {
+                        this.declareVariable(declaration.id.name, this.randomRegister(), {
+                            functionScoped: node.kind === 'var'
+                        });
+                        this.chunk.append(new Opcode('SET_REF', this.getVariable(declaration.id.name), 0));
                     }
                 }
                 break;

@@ -15,6 +15,8 @@
 
 const acorn = require("acorn");
 const walk = require("acorn-walk");
+const babel = require("@babel/core");
+const decoratorsPlugin = require("@babel/plugin-proposal-decorators");
 const eslintScope = require("eslint-scope");
 const {readFileSync, writeFileSync} = require("node:fs");
 const path = require("node:path");
@@ -35,6 +37,36 @@ const encodings = ['base64']
 
 if (!fs.existsSync(path.join(__dirname, '../output'))) fs.mkdirSync(path.join(__dirname, '../output'))
 
+function preprocessDecorators(code) {
+    try {
+        acorn.parse(code, {
+            ecmaVersion: "latest",
+            sourceType: "module"
+        });
+
+        return code;
+    } catch (error) {
+        if (!String(error.message).includes("Unexpected character '@'")) {
+            throw error;
+        }
+    }
+
+    const transformed = babel.transformSync(code, {
+        configFile: false,
+        babelrc: false,
+        comments: true,
+        retainLines: true,
+        sourceType: "module",
+        plugins: [[decoratorsPlugin, {legacy: true}]]
+    });
+
+    if (!transformed || !transformed.code) {
+        throw new Error("Failed to preprocess decorators");
+    }
+
+    return transformed.code;
+}
+
 async function transpile(code, options) {
     options = options ?? {};
     options.fileName = options.fileName ?? crypto.randomBytes(8).toString('hex')
@@ -50,6 +82,7 @@ async function transpile(code, options) {
     if (!path.isAbsolute(options.vmOutputPath)) options.vmOutputPath = path.join(process.cwd(), options.vmOutputPath);
 
     const encoding = encodings[crypto.randomInt(0, encodings.length)];
+    code = preprocessDecorators(code);
 
     const comments = [];
 
