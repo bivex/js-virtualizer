@@ -1,21 +1,31 @@
 # js-virtualizer
 
-virtualization-based obfuscation for javascript
-
----
+Virtualization-based obfuscation for JavaScript.
 
 ![Unit Tests](https://github.com/aesthetic0001/js-virtualizer/actions/workflows/tests.yml/badge.svg) ![npm downloads](https://img.shields.io/npm/dm/js-virtualizer) ![npm version](https://img.shields.io/npm/v/js-virtualizer) ![License](https://img.shields.io/npm/l/js-virtualizer) 
 
-js-virtualizer is a proof-of-concept project which brings virtualization-based obfuscation to javascript. In this implementation, bytecode is fed to a virtual machine implemented in javascript which runs on its own instruction set. A transpiler is included to convert select **functions** to opcodes for the VM. It is important to note that js-virtualizer is **not intended for use on entire programs, but rather for specified functions**! There will be a significant performance hit if you try to run an entire program through the VM.
+js-virtualizer transpiles selected JavaScript functions into custom bytecode and runs them inside a JavaScript VM. It is built for targeted function protection rather than whole-program virtualization.
 
-## Usage
+## Quick Start
 
-Install dependencies with `bun install`, then run tests with `bun run test`.
+Install dependencies:
+
+```bash
+bun install
+```
+
+Run the test suite:
+
+```bash
+bun run test
+```
 
 Useful demo scripts:
 
 - `bun run demo:fingerprint` - generates a Node.js fingerprint demo and prints previews of the obfuscated VM and virtualized output
 - `bun run demo:fingerprint:browser` - generates a browser demo at `output/browser-fingerprint/index.html`
+
+## Usage
 
 > [!WARNING]  
 > You need to mark the functions you want to virtualize by putting a comment with the text `// @virtualize` above the function.
