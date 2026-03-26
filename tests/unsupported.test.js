@@ -426,6 +426,90 @@ console.log(demo());
         expect(virtualizedOutput.trim()).toBe("14");
     });
 
+    test("supports private brand checks inside virtualized functions", async () => {
+        const code = `
+// @virtualize
+function demo() {
+  class FingerprintBox {
+    #seed = 3;
+
+    hasBrand(target) {
+      return #seed in target;
+    }
+  }
+
+  const box = new FingerprintBox();
+  return String(box.hasBrand(box)) + ":" + String(box.hasBrand({}));
+}
+
+console.log(demo());
+`;
+
+        const {originalOutput, virtualizedOutput} = await transpileAndRun(code, "class-private-brand-check");
+        expect(virtualizedOutput).toBe(originalOutput);
+        expect(virtualizedOutput.trim()).toBe("true:false");
+    });
+
+    test("supports computed class keys inside virtualized functions", async () => {
+        const code = `
+// @virtualize
+function demo() {
+  const fieldKey = "value";
+  const methodKey = "render";
+  const accessorKey = "label";
+
+  class FingerprintBox {
+    [fieldKey] = 9;
+
+    [methodKey]() {
+      return this[fieldKey];
+    }
+
+    get [accessorKey]() {
+      return "k:" + this[methodKey]();
+    }
+  }
+
+  return new FingerprintBox()[accessorKey];
+}
+
+console.log(demo());
+`;
+
+        const {originalOutput, virtualizedOutput} = await transpileAndRun(code, "class-computed-keys");
+        expect(virtualizedOutput).toBe(originalOutput);
+        expect(virtualizedOutput.trim()).toBe("k:9");
+    });
+
+    test("supports computed super property access inside virtualized functions", async () => {
+        const code = `
+// @virtualize
+function demo() {
+  const methodKey = "render";
+
+  class BaseBox {
+    [methodKey]() {
+      return "base";
+    }
+  }
+
+  class ChildBox extends BaseBox {
+    [methodKey]() {
+      return super[methodKey]() + ":child";
+    }
+  }
+
+  return new ChildBox()[methodKey]();
+}
+
+console.log(demo());
+`;
+
+        const {originalOutput, virtualizedOutput} = await transpileAndRun(code, "class-computed-super");
+        expect(virtualizedOutput).toBe(originalOutput);
+        expect(virtualizedOutput.trim()).toBe("base:child");
+    });
+
     test("supports async concurrency across the whole virtualized program", async () => {
         const slug = `async-concurrency-${crypto.randomBytes(4).toString("hex")}`;
         const code = `
