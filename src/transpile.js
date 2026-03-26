@@ -110,6 +110,13 @@ async function transpile(code, options) {
             return found
         })()
         const functionBody = desugarStatementList(node.body.body);
+        walk.simple({type: "Program", body: functionBody}, {
+            Identifier(identifier) {
+                if (identifier.name === "Object" && !dependencies.includes("Object")) {
+                    dependencies.push("Object");
+                }
+            }
+        });
         const regToDep = {}
 
         const generator = new FunctionBytecodeGenerator(functionBody);

@@ -113,5 +113,63 @@ console.log(demo());
         expect(virtualizedOutput.trim()).toBe("fp:23");
     });
 
+    test("supports class expressions inside virtualized functions", async () => {
+        const code = `
+// @virtualize
+function demo() {
+  const FingerprintBox = class {
+    constructor(prefix, value) {
+      this.prefix = prefix;
+      this.value = value;
+    }
+
+    render() {
+      return this.prefix + ":" + this.value;
+    }
+  };
+
+  const box = new FingerprintBox("expr", 29);
+  return box.render();
+}
+
+console.log(demo());
+`;
+
+        const {originalOutput, virtualizedOutput} = await transpileAndRun(code, "class-expression");
+        expect(virtualizedOutput).toBe(originalOutput);
+        expect(virtualizedOutput.trim()).toBe("expr:29");
+    });
+
+    test("supports class getters and setters inside virtualized functions", async () => {
+        const code = `
+// @virtualize
+function demo() {
+  class FingerprintBox {
+    constructor() {
+      this._value = 0;
+    }
+
+    get value() {
+      return "v:" + this._value;
+    }
+
+    set value(next) {
+      this._value = next + 1;
+    }
+  }
+
+  const box = new FingerprintBox();
+  box.value = 8;
+  return box.value;
+}
+
+console.log(demo());
+`;
+
+        const {originalOutput, virtualizedOutput} = await transpileAndRun(code, "class-accessors");
+        expect(virtualizedOutput).toBe(originalOutput);
+        expect(virtualizedOutput.trim()).toBe("v:9");
+    });
+
     test.todo("supports async concurrency across the whole virtualized program");
 });
