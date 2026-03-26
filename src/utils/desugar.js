@@ -141,6 +141,20 @@ function buildPrivateFieldUpdateExpression(expression, privateFields) {
     })()`);
 }
 
+function buildPrivateCallExpression(expression, privateFields) {
+    const info = getPrivateFieldInfo(expression.callee.property, privateFields);
+    if (!info) {
+        return null;
+    }
+
+    const objectCode = escodegen.generate(transformPrivateExpression(expression.callee.object, privateFields));
+    const argsCode = expression.arguments
+        .map((argument) => escodegen.generate(transformPrivateExpression(argument, privateFields)))
+        .join(", ");
+
+    return parseExpression(`(${buildPrivateGetCode(info, objectCode)}).call(${objectCode}${argsCode ? `, ${argsCode}` : ""})`);
+}
+
 function transformPrivateExpression(expression, privateFields) {
     if (!expression) return expression;
 
@@ -183,6 +197,12 @@ function transformPrivateExpression(expression, privateFields) {
             expression.alternate = transformPrivateExpression(expression.alternate, privateFields);
             return expression;
         case "CallExpression":
+            if (expression.callee.type === "MemberExpression" && expression.callee.property.type === "PrivateIdentifier") {
+                return buildPrivateCallExpression(expression, privateFields);
+            }
+            expression.callee = transformPrivateExpression(expression.callee, privateFields);
+            expression.arguments = expression.arguments.map((argument) => transformPrivateExpression(argument, privateFields));
+            return expression;
         case "NewExpression":
             expression.callee = transformPrivateExpression(expression.callee, privateFields);
             expression.arguments = expression.arguments.map((argument) => transformPrivateExpression(argument, privateFields));
@@ -460,7 +480,7 @@ function transformSuperStatement(statement, options) {
 function buildFieldInitializationCode(field, targetCode, privateFields) {
     const valueCode = field.value
         ? escodegen.generate(transformPrivateExpression(desugarExpression(field.value), privateFields))
-        : "undefined";
+        : "void 0";
 
     if (field.key.type === "PrivateIdentifier") {
         const info = getPrivateFieldInfo(field.key, privateFields);
@@ -519,12 +539,22 @@ function buildPrivateMemberInitializationCode(info, targetCode, privateFields, o
     return `${info.storageName}.set(${targetCode}, ${valueCode});`;
 }
 
+function transformClassStatementForCode(statement, privateFields, options) {
+    return escodegen.generate(
+        transformSuperStatement(
+            transformPrivateStatement(desugarStatement(statement), privateFields),
+            options
+        )
+    );
+}
+
 function buildClassBodyCode(node, className) {
     const superClassCode = node.superClass ? escodegen.generate(desugarExpression(node.superClass)) : null;
 
     const constructorMethod = node.body.body.find((method) => method.kind === "constructor");
     const instanceFields = node.body.body.filter((entry) => entry.type === "PropertyDefinition" && !entry.static);
     const staticFields = node.body.body.filter((entry) => entry.type === "PropertyDefinition" && entry.static);
+    const staticBlocks = node.body.body.filter((entry) => entry.type === "StaticBlock");
     const privateFields = new Map();
 
     for (const entry of node.body.body) {
@@ -639,6 +669,9 @@ function buildClassBodyCode(node, className) {
         if (method.type === "PropertyDefinition") {
             continue;
         }
+        if (method.type === "StaticBlock") {
+            continue;
+        }
         if (method.type !== "MethodDefinition") {
             throw new Error(`Unsupported class element: ${method.type}`);
         }
@@ -652,18 +685,11 @@ function buildClassBodyCode(node, className) {
                 : `${className}.prototype${getPropertyAccessorCode(method.key, method.computed)}`;
             const params = method.value.params.map((param) => escodegen.generate(param)).join(", ");
             const body = method.value.body.body
-                .map((statement) =>
-                    escodegen.generate(
-                        transformSuperStatement(
-                            transformPrivateStatement(desugarStatement(statement), privateFields),
-                            {
-                                superClassCode,
-                                isStatic: method.static,
-                                inConstructor: false
-                            }
-                        )
-                    )
-                )
+                .map((statement) => transformClassStatementForCode(statement, privateFields, {
+                    superClassCode,
+                    isStatic: method.static,
+                    inConstructor: false
+                }))
                 .join("\n");
 
             code += `${target} = function(${params}) {\n${body}\n};\n`;
@@ -699,18 +725,11 @@ function buildClassBodyCode(node, className) {
         if (group.get) {
             const params = group.get.value.params.map((param) => escodegen.generate(param)).join(", ");
             const body = group.get.value.body.body
-                .map((statement) =>
-                    escodegen.generate(
-                        transformSuperStatement(
-                            transformPrivateStatement(desugarStatement(statement), privateFields),
-                            {
-                                superClassCode,
-                                isStatic: group.static,
-                                inConstructor: false
-                            }
-                        )
-                    )
-                )
+                .map((statement) => transformClassStatementForCode(statement, privateFields, {
+                    superClassCode,
+                    isStatic: group.static,
+                    inConstructor: false
+                }))
                 .join("\n");
             descriptorParts.push(`get: function(${params}) {\n${body}\n}`);
         }
@@ -718,18 +737,11 @@ function buildClassBodyCode(node, className) {
         if (group.set) {
             const params = group.set.value.params.map((param) => escodegen.generate(param)).join(", ");
             const body = group.set.value.body.body
-                .map((statement) =>
-                    escodegen.generate(
-                        transformSuperStatement(
-                            transformPrivateStatement(desugarStatement(statement), privateFields),
-                            {
-                                superClassCode,
-                                isStatic: group.static,
-                                inConstructor: false
-                            }
-                        )
-                    )
-                )
+                .map((statement) => transformClassStatementForCode(statement, privateFields, {
+                    superClassCode,
+                    isStatic: group.static,
+                    inConstructor: false
+                }))
                 .join("\n");
             descriptorParts.push(`set: function(${params}) {\n${body}\n}`);
         }
@@ -739,19 +751,43 @@ function buildClassBodyCode(node, className) {
         code += `Object.defineProperty(${target}, ${keyCode}, {${descriptorParts.join(", ")}});\n`;
     }
 
-    for (const field of staticFields) {
-        if (field.key.type === "PrivateIdentifier") {
+    for (const entry of node.body.body) {
+        if (entry.type === "PropertyDefinition" && entry.static) {
+            if (entry.key.type === "PrivateIdentifier") {
+                const info = privateFields.get(entry.key.name);
+                code += `${buildPrivateMemberInitializationCode(info, className, privateFields, {
+                    superClassCode,
+                    isStatic: true,
+                    inConstructor: false
+                })}\n`;
+                continue;
+            }
+
+            code += `${buildFieldInitializationCode(entry, className, privateFields)}\n`;
             continue;
         }
-        code += `${buildFieldInitializationCode(field, className, privateFields)}\n`;
-    }
 
-    for (const info of Array.from(privateFields.values()).filter((entry) => entry.static)) {
-        code += `${buildPrivateMemberInitializationCode(info, className, privateFields, {
-            superClassCode,
-            isStatic: true,
-            inConstructor: false
-        })}\n`;
+        if (entry.type === "MethodDefinition" && entry.static && entry.key.type === "PrivateIdentifier") {
+            const info = privateFields.get(entry.key.name);
+            code += `${buildPrivateMemberInitializationCode(info, className, privateFields, {
+                superClassCode,
+                isStatic: true,
+                inConstructor: false
+            })}\n`;
+            continue;
+        }
+
+        if (entry.type === "StaticBlock") {
+            const body = entry.body
+                .map((statement) => transformClassStatementForCode(statement, privateFields, {
+                    superClassCode,
+                    isStatic: true,
+                    inConstructor: false
+                }))
+                .join("\n");
+
+            code += `(function() {\n${body}\n}).call(${className});\n`;
+        }
     }
 
     return code;

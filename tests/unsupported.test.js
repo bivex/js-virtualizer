@@ -378,6 +378,54 @@ console.log(demo());
         expect(virtualizedOutput.trim()).toBe("16");
     });
 
+    test("supports class static blocks inside virtualized functions", async () => {
+        const code = `
+// @virtualize
+function demo() {
+  class FingerprintBox {
+    static prefix = "fp";
+
+    static {
+      this.value = this.prefix + ":7";
+    }
+  }
+
+  return FingerprintBox.value;
+}
+
+console.log(demo());
+`;
+
+        const {originalOutput, virtualizedOutput} = await transpileAndRun(code, "class-static-block");
+        expect(virtualizedOutput).toBe(originalOutput);
+        expect(virtualizedOutput.trim()).toBe("fp:7");
+    });
+
+    test("supports static blocks with private static members inside virtualized functions", async () => {
+        const code = `
+// @virtualize
+function demo() {
+  class FingerprintBox {
+    static #seed = 5;
+    static total;
+
+    static {
+      this.#seed += 9;
+      this.total = this.#seed;
+    }
+  }
+
+  return FingerprintBox.total;
+}
+
+console.log(demo());
+`;
+
+        const {originalOutput, virtualizedOutput} = await transpileAndRun(code, "class-static-block-private");
+        expect(virtualizedOutput).toBe(originalOutput);
+        expect(virtualizedOutput.trim()).toBe("14");
+    });
+
     test("supports async concurrency across the whole virtualized program", async () => {
         const slug = `async-concurrency-${crypto.randomBytes(4).toString("hex")}`;
         const code = `

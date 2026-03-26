@@ -126,6 +126,7 @@ main();
 | Classes | instance fields | ✅ | public and private |
 | Classes | static fields | ✅ | public and private |
 | Classes | private methods | ✅ | instance and static |
+| Classes | static blocks | ✅ | public and private static member access covered |
 | Classes | inheritance | ✅ | |
 | Classes | `super()` and `super.method()` | ✅ | constructor, instance, and static method cases |
 
@@ -141,9 +142,8 @@ main();
 
 | Area | Feature | Status | Notes |
 | --- | --- | --- | --- |
-| Classes | decorators | ❌ | not implemented |
-| Classes | static blocks | ❌ | not implemented |
-| Classes | remaining advanced class syntax | ❌ | class features beyond the matrix above may fail |
+| Classes | decorators | ❌ | blocked by the current `acorn` parser setup, which does not parse `@decorator` syntax |
+| Classes | remaining advanced class syntax | ❌ | edge cases like decorator pipelines and other non-covered class proposals may fail |
 | Obfuscation | argument scrambling | ❌ | not implemented |
 | Obfuscation | string encryption | ❌ | not implemented |
 | Obfuscation | dead code injection | ❌ | not implemented |
