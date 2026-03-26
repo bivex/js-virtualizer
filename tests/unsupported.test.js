@@ -22,7 +22,7 @@ const decoratorsPlugin = require("@babel/plugin-proposal-decorators");
 
 const {transpile} = require("../src/transpile");
 
-function toRunnableSource(code) {
+function toRunnableSource(code, decoratorsMode = "legacy") {
     try {
         new Function(code);
         return code;
@@ -38,7 +38,7 @@ function toRunnableSource(code) {
         comments: true,
         retainLines: true,
         sourceType: "module",
-        plugins: [[decoratorsPlugin, {legacy: true}]]
+        plugins: [[decoratorsPlugin, decoratorsMode === "standard" ? {version: "2023-11"} : {legacy: true}]]
     });
 
     if (!transformed || !transformed.code) {
@@ -48,19 +48,21 @@ function toRunnableSource(code) {
     return transformed.code;
 }
 
-async function transpileAndRun(code, label) {
+async function transpileAndRun(code, label, transpileOptions = {}) {
     const slug = `${label}-${crypto.randomBytes(4).toString("hex")}`;
     const inputPath = path.join(__dirname, `../output/${slug}.source.js`);
     const vmOutputPath = path.join(__dirname, `../output/${slug}.vm.js`);
     const transpiledOutputPath = path.join(__dirname, `../output/${slug}.virtualized.js`);
 
-    fs.writeFileSync(inputPath, toRunnableSource(code));
+    const decoratorsMode = transpileOptions.decoratorsMode ?? "legacy";
+    fs.writeFileSync(inputPath, toRunnableSource(code, decoratorsMode));
 
     const result = await transpile(code, {
         fileName: `${slug}.js`,
         vmOutputPath,
         transpiledOutputPath,
-        passes: ["RemoveUnused"]
+        passes: ["RemoveUnused"],
+        ...transpileOptions
     });
 
     const originalOutput = childProcess.execSync(`node ${inputPath}`).toString();
@@ -596,6 +598,68 @@ console.log(demo());
         const {originalOutput, virtualizedOutput} = await transpileAndRun(code, "class-decorator");
         expect(virtualizedOutput).toBe(originalOutput);
         expect(virtualizedOutput.trim()).toBe("class:decorated");
+    });
+
+    test("supports standard method decorators inside virtualized functions", async () => {
+        const code = `
+function decorateMethod(value, context) {
+  return function(...args) {
+    return value.call(this, ...args) + ":std";
+  };
+}
+
+// @virtualize
+function demo() {
+  class FingerprintBox {
+    @decorateMethod
+    render() {
+      return "method";
+    }
+  }
+
+  return new FingerprintBox().render();
+}
+
+console.log(demo());
+`;
+
+        const {originalOutput, virtualizedOutput} = await transpileAndRun(code, "class-method-decorator-standard", {
+            decoratorsMode: "standard"
+        });
+        expect(virtualizedOutput).toBe(originalOutput);
+        expect(virtualizedOutput.trim()).toBe("method:std");
+    });
+
+    test("supports standard class decorators inside virtualized functions", async () => {
+        const code = `
+function decorateClass(value, context) {
+  return class extends value {
+    label() {
+      return super.label() + ":std";
+    }
+  };
+}
+
+// @virtualize
+function demo() {
+  @decorateClass
+  class FingerprintBox {
+    label() {
+      return "class";
+    }
+  }
+
+  return new FingerprintBox().label();
+}
+
+console.log(demo());
+`;
+
+        const {originalOutput, virtualizedOutput} = await transpileAndRun(code, "class-decorator-standard", {
+            decoratorsMode: "standard"
+        });
+        expect(virtualizedOutput).toBe(originalOutput);
+        expect(virtualizedOutput.trim()).toBe("class:std");
     });
 
     test("supports async concurrency across the whole virtualized program", async () => {

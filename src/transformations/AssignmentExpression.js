@@ -14,7 +14,7 @@
  */
 
 const {log} = require("../utils/log");
-const {Opcode} = require("../utils/assembler");
+const {Opcode, BytecodeValue, encodeDWORD} = require("../utils/assembler");
 const {binaryOperatorToOpcode, needsCleanup} = require("../utils/constants");
 
 // ALWAYS produces a copy of result, ownership of the copy is passed to the caller
@@ -23,10 +23,13 @@ function resolveAssignmentExpression(node) {
     let leftRegister
     let leftObjectRegister
     let leftPropertyRegister
+    let patternAssignment = false
 
     if (left.type === 'MemberExpression') {
         leftObjectRegister = this.resolveExpression(left.object).outputRegister
         leftPropertyRegister = this.resolveExpression(left.property, {computed: left.computed}).outputRegister
+    } else if (left.type === 'ArrayPattern' || left.type === 'ObjectPattern') {
+        patternAssignment = true
     } else {
         leftRegister = this.resolveExpression(left).outputRegister
     }
@@ -56,6 +59,35 @@ function resolveAssignmentExpression(node) {
             if (left.type === 'MemberExpression') {
                 log(`Evaluating regular assignment expression with SET_PROP`)
                 this.chunk.append(new Opcode('SET_PROP', leftObjectRegister, leftPropertyRegister, rightRegister));
+            } else if (left.type === 'ArrayPattern') {
+                log(`Evaluating array destructuring assignment expression`)
+                const counterRegister = this.getAvailableTempLoad()
+                const oneRegister = this.getAvailableTempLoad()
+                this.chunk.append(new Opcode('LOAD_DWORD', counterRegister, encodeDWORD(0)));
+                this.chunk.append(new Opcode('LOAD_DWORD', oneRegister, encodeDWORD(1)));
+
+                for (const element of left.elements) {
+                    if (element && element.type === 'Identifier') {
+                        this.chunk.append(new Opcode('GET_INDEX', this.getVariable(element.name), rightRegister, counterRegister));
+                    }
+                    this.chunk.append(new Opcode('ADD', counterRegister, counterRegister, oneRegister))
+                }
+
+                this.freeTempLoad(counterRegister)
+                this.freeTempLoad(oneRegister)
+            } else if (left.type === 'ObjectPattern') {
+                log(`Evaluating object destructuring assignment expression`)
+                for (const property of left.properties) {
+                    const {key, value} = property
+                    if (value.type !== 'Identifier') {
+                        throw new Error(`Unsupported ObjectPattern assignment target: ${value.type}`)
+                    }
+                    const propRegister = this.getAvailableTempLoad()
+                    const prop = new BytecodeValue(key.type === 'Identifier' ? key.name : key.value, propRegister)
+                    this.chunk.append(prop.getLoadOpcode())
+                    this.chunk.append(new Opcode('GET_PROP', this.getVariable(value.name), rightRegister, propRegister))
+                    this.freeTempLoad(propRegister)
+                }
             } else {
                 log(`Evaluating regular assignment expression with SET_REF`)
                 this.chunk.append(new Opcode('SET_REF', leftRegister, rightRegister));
@@ -63,7 +95,7 @@ function resolveAssignmentExpression(node) {
             break;
         }
         default: {
-            if (left.type === 'MemberExpression') {
+            if (left.type === 'MemberExpression' || patternAssignment) {
                 throw new Error(`Unsupported assignment operator for MemberExpression: ${operator}`)
             }
             const opcode = binaryOperatorToOpcode(operator.slice(0, -1));
@@ -73,7 +105,7 @@ function resolveAssignmentExpression(node) {
     }
 
     const outputRegister = this.getAvailableTempLoad()
-    this.chunk.append(new Opcode('SET_REF', outputRegister, left.type === 'MemberExpression' ? rightRegister : leftRegister))
+    this.chunk.append(new Opcode('SET_REF', outputRegister, (left.type === 'MemberExpression' || patternAssignment) ? rightRegister : leftRegister))
 
     if (needsCleanup(left) && leftRegister !== undefined) this.freeTempLoad(leftRegister)
     if (this.TLMap[leftObjectRegister]) this.freeTempLoad(leftObjectRegister)

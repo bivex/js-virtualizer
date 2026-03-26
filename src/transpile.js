@@ -37,7 +37,7 @@ const encodings = ['base64']
 
 if (!fs.existsSync(path.join(__dirname, '../output'))) fs.mkdirSync(path.join(__dirname, '../output'))
 
-function preprocessDecorators(code) {
+function preprocessDecorators(code, decoratorsMode) {
     try {
         acorn.parse(code, {
             ecmaVersion: "latest",
@@ -57,7 +57,7 @@ function preprocessDecorators(code) {
         comments: true,
         retainLines: true,
         sourceType: "module",
-        plugins: [[decoratorsPlugin, {legacy: true}]]
+        plugins: [[decoratorsPlugin, decoratorsMode === "standard" ? {version: "2023-11"} : {legacy: true}]]
     });
 
     if (!transformed || !transformed.code) {
@@ -69,6 +69,7 @@ function preprocessDecorators(code) {
 
 async function transpile(code, options) {
     options = options ?? {};
+    options.decoratorsMode = options.decoratorsMode ?? "legacy";
     options.fileName = options.fileName ?? crypto.randomBytes(8).toString('hex')
     options.writeOutput = options.writeOutput ?? true;
     options.vmOutputPath = options.vmOutputPath ?? path.join(__dirname, `../output/${options.fileName}.vm.js`);
@@ -82,7 +83,7 @@ async function transpile(code, options) {
     if (!path.isAbsolute(options.vmOutputPath)) options.vmOutputPath = path.join(process.cwd(), options.vmOutputPath);
 
     const encoding = encodings[crypto.randomInt(0, encodings.length)];
-    code = preprocessDecorators(code);
+    code = preprocessDecorators(code, options.decoratorsMode);
 
     const comments = [];
 

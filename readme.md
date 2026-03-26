@@ -129,7 +129,7 @@ main();
 | Classes | static blocks | ✅ | public and private static member access covered |
 | Classes | private brand checks (`#x in obj`) | ✅ | |
 | Classes | computed class keys | ✅ | fields, methods, accessors, and computed `super[...]` calls |
-| Classes | decorators | ✅ | supported through Babel preprocessing in `legacy` mode before Acorn parsing |
+| Classes | decorators | ✅ | supported through Babel preprocessing before Acorn parsing in both `legacy` and standard (`2023-11`) modes |
 | Classes | inheritance | ✅ | |
 | Classes | `super()` and `super.method()` | ✅ | constructor, instance, and static method cases |
 
@@ -145,7 +145,7 @@ main();
 
 | Area | Feature | Status | Notes |
 | --- | --- | --- | --- |
-| Classes | remaining advanced class syntax | ❌ | mostly narrowed to standard-decorator semantics, parser-level proposals, and untested proposal-era edge cases |
+| Classes | remaining advanced class syntax | ❌ | now mostly narrowed to parser-level proposals and untested proposal-era edge cases outside the current matrix |
 | Obfuscation | argument scrambling | ❌ | not implemented |
 | Obfuscation | string encryption | ❌ | not implemented |
 | Obfuscation | dead code injection | ❌ | not implemented |
@@ -161,5 +161,5 @@ main();
 - async support now covers awaited calls, stored promises, `Promise.all`, and nested async virtualized functions. it is still less battle-tested than the synchronous path and may expose edge cases in more exotic async/control-flow combinations
 - performance is not guaranteed. js-virtualizer is not intended for use in high-performance applications. it is intended for use in applications where you need to protect your code from reverse engineering. For instance, an express server with a virtualized function using for loops handled about 50% of the requests of the non-virtualized counterpart. You can find the implementation in the samples folder and test it out for yourself
 - given the virtual machine, the virtualized function is pretty trivial to reverse engineer. it is recommended that the virtual machine class is obfuscated before use
-- decorator syntax is preprocessed through Babel before Acorn parsing. the currently tested path uses `legacy` decorator semantics rather than the latest standard decorator transform
+- decorator syntax is preprocessed through Babel before Acorn parsing. both `legacy` and standard (`2023-11`) decorator transforms are covered
 - opcode shuffling/minification exists, but deeper obfuscation layers are still incomplete
