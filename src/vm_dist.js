@@ -174,6 +174,10 @@ function deriveAntiDebugSeed(key) {
     return createSeedFromString(`anti-debug:${String(key ?? "")}`, 0x7f4a7c15) || 0x7f4a7c15;
 }
 
+function deriveInstructionByteSeed(key) {
+    return createSeedFromString(`instruction:${String(key ?? "")}`, 0x2e5aa50d) || 0x2e5aa50d;
+}
+
 function createOpcodePositionMask(seed, position) {
     let state = (seed ^ Math.imul((position + 1) >>> 0, 0x9e3779b1)) >>> 0;
     state = rotateLeft(state, position % 23 + 5);
@@ -192,6 +196,21 @@ function transformJumpTargetBytes(input, position, seed) {
     const data = input instanceof Uint8Array ? new Uint8Array(input) : new Uint8Array(input);
     for (let index = 0; index < data.length; index++) {
         data[index] ^= createJumpTargetByteMask(seed >>> 0, (position + index) >>> 0);
+    }
+    return data;
+}
+
+function createInstructionByteMask(seed, instructionPosition, bytePosition) {
+    let state = (seed ^ Math.imul((instructionPosition + 1) >>> 0, 0x6d2b79f5) ^ Math.imul((bytePosition + 1) >>> 0, 0x45d9f3b)) >>> 0;
+    state = rotateLeft(state, (instructionPosition + bytePosition) % 17 + 7);
+    state ^= state >>> 13;
+    return state & 0xFF;
+}
+
+function transformInstructionBytes(input, instructionPosition, seed) {
+    const data = input instanceof Uint8Array ? new Uint8Array(input) : new Uint8Array(input);
+    for (let index = 0; index < data.length; index++) {
+        data[index] ^= createInstructionByteMask(seed >>> 0, instructionPosition >>> 0, (instructionPosition + 1 + index) >>> 0);
     }
     return data;
 }
@@ -277,7 +296,8 @@ function unpackBytecodeEnvelope(code, format, key) {
             payload: decryptedPayload,
             encrypted: true,
             statefulOpcodes: flags.includes("S"),
-            jumpTargetEncoding: flags.includes("J")
+            jumpTargetEncoding: flags.includes("J"),
+            perInstructionEncoding: flags.includes("I")
         };
     }
 
@@ -286,7 +306,8 @@ function unpackBytecodeEnvelope(code, format, key) {
             payload: code,
             encrypted: false,
             statefulOpcodes: false,
-            jumpTargetEncoding: false
+            jumpTargetEncoding: false,
+            perInstructionEncoding: false
         };
     }
 
@@ -311,7 +332,8 @@ function unpackBytecodeEnvelope(code, format, key) {
         payload,
         encrypted: false,
         statefulOpcodes: false,
-        jumpTargetEncoding: false
+        jumpTargetEncoding: false,
+        perInstructionEncoding: false
     };
 }
 
@@ -351,7 +373,8 @@ function createMemoryProtectionState(key) {
         enabled: true,
         seed,
         heap: new Map(),
-        nextToken: 1
+        nextToken: 1,
+        laneEpoch: 0
     };
 }
 
@@ -360,30 +383,39 @@ function createRegisterProtectionMask(seed, register) {
 }
 
 function createProtectedRegisterValue(state, register, value) {
+    state.laneEpoch += 1;
     const token = state.nextToken++;
     state.heap.set(token, value);
-    const maskedToken = (token ^ createRegisterProtectionMask(state.seed, register)) >>> 0;
-    const guard = rotateLeft((maskedToken ^ state.seed ^ register) >>> 0, 11);
+    const laneSeed = (state.seed ^ Math.imul(state.laneEpoch, 0x9e3779b1)) >>> 0;
+    const maskedToken = (token ^ createRegisterProtectionMask(laneSeed, register)) >>> 0;
+    const guard = rotateLeft((maskedToken ^ laneSeed ^ register) >>> 0, 11);
     return Object.freeze({
         __jsvmProtected: true,
         token: maskedToken,
-        guard
+        guard,
+        laneEpoch: state.laneEpoch
     });
 }
 
-function restoreProtectedRegisterValue(state, register, value) {
+function restoreProtectedRegisterValue(state, register, value, options = {}) {
     if (!value || value.__jsvmProtected !== true) {
         return value;
     }
-    const expectedGuard = rotateLeft((value.token ^ state.seed ^ register) >>> 0, 11);
+    const laneEpoch = value.laneEpoch >>> 0;
+    const laneSeed = (state.seed ^ Math.imul(laneEpoch, 0x9e3779b1)) >>> 0;
+    const expectedGuard = rotateLeft((value.token ^ laneSeed ^ register) >>> 0, 11);
     if (value.guard !== expectedGuard) {
         throw new Error("VM register protection check failed");
     }
-    const token = (value.token ^ createRegisterProtectionMask(state.seed, register)) >>> 0;
+    const token = (value.token ^ createRegisterProtectionMask(laneSeed, register)) >>> 0;
     if (!state.heap.has(token)) {
         throw new Error("VM register protection token missing");
     }
-    return state.heap.get(token);
+    const resolvedValue = state.heap.get(token);
+    if (options.consume) {
+        state.heap.delete(token);
+    }
+    return resolvedValue;
 }
 
 function createRegisterReference(value) {
@@ -510,7 +542,7 @@ const implOpcode = {
     }, VFUNC_CALL: function () {
         const cur = this.read(registers.INSTRUCTION_POINTER);
         const offset = this.readDWORD(), returnDataStore = this.readByte(), argMap = this.readArrayRegisters();
-        this.regstack.push([this.registers.slice(), returnDataStore, new Map(this.registerRefs)]);
+        this.regstack.push([this.captureRegisterSnapshot(), returnDataStore, new Map(this.registerRefs)]);
         for (let i = 0; i < argMap.length; i += 2) {
             this.write(argMap[i], this.read(argMap[i + 1]));
         }
@@ -542,11 +574,12 @@ const implOpcode = {
             const fork = new vm.constructor();
             fork.setBytecodeIntegrityKey(vm.bytecodeIntegrityKey);
             fork.code = vm.code;
-            fork.registers = vm.registers.slice();
+            fork.registers = vm.captureRegisterSnapshot();
             fork.regstack = [];
             fork.registerRefs = new Map(vm.registerRefs);
             fork.statefulOpcodesEnabled = vm.statefulOpcodesEnabled;
             fork.jumpTargetEncodingEnabled = vm.jumpTargetEncodingEnabled;
+            fork.perInstructionEncodingEnabled = vm.perInstructionEncodingEnabled;
             fork.runtimeOpcodeState = vm.runtimeOpcodeState;
             fork.adoptMemoryProtectionState(vm.memoryProtectionState);
             fork.adoptAntiDebugState(vm.antiDebugState);
@@ -576,11 +609,12 @@ const implOpcode = {
             const fork = new vm.constructor();
             fork.setBytecodeIntegrityKey(vm.bytecodeIntegrityKey);
             fork.code = vm.code;
-            fork.registers = vm.registers.slice();
+            fork.registers = vm.captureRegisterSnapshot();
             fork.regstack = [];
             fork.registerRefs = new Map(vm.registerRefs);
             fork.statefulOpcodesEnabled = vm.statefulOpcodesEnabled;
             fork.jumpTargetEncodingEnabled = vm.jumpTargetEncodingEnabled;
+            fork.perInstructionEncodingEnabled = vm.perInstructionEncodingEnabled;
             fork.runtimeOpcodeState = vm.runtimeOpcodeState;
             fork.adoptMemoryProtectionState(vm.memoryProtectionState);
             fork.adoptAntiDebugState(vm.antiDebugState);
@@ -625,6 +659,7 @@ const implOpcode = {
         for (const restoreRegister of restoreRegisters) {
             this.registers[restoreRegister] = oldRegisters[restoreRegister];
         }
+        this.releaseRegisterSnapshot(oldRegisters, restoreRegisters);
         if (oldRegisterRefs) {
             this.registerRefs = oldRegisterRefs;
         }
@@ -898,6 +933,9 @@ class JSVM {
         this.statefulOpcodesEnabled = false
         this.jumpTargetSeed = 0
         this.jumpTargetEncodingEnabled = false
+        this.instructionByteSeed = 0
+        this.perInstructionEncodingEnabled = false
+        this.currentInstructionBase = null
         this.runtimeDispatchSeed = 0
         this.runtimeOpcodeState = 0
         this.antiDebugState = null
@@ -932,8 +970,16 @@ class JSVM {
         return deriveJumpTargetSeed(key)
     }
 
+    static deriveInstructionByteSeed(key) {
+        return deriveInstructionByteSeed(key)
+    }
+
     static encodeJumpTargetBytes(bytes, position, seed) {
         return transformJumpTargetBytes(bytes, position, seed)
+    }
+
+    static encodeInstructionBytes(bytes, instructionPosition, seed) {
+        return transformInstructionBytes(bytes, instructionPosition, seed)
     }
 
     refreshDispatchTable() {
@@ -987,6 +1033,7 @@ class JSVM {
         this.bytecodeIntegrityKey = String(key ?? "")
         this.opcodeStateSeed = this.bytecodeIntegrityKey ? deriveOpcodeStateSeed(this.bytecodeIntegrityKey) : 0
         this.jumpTargetSeed = this.bytecodeIntegrityKey ? deriveJumpTargetSeed(this.bytecodeIntegrityKey) : 0
+        this.instructionByteSeed = this.bytecodeIntegrityKey ? deriveInstructionByteSeed(this.bytecodeIntegrityKey) : 0
         this.runtimeDispatchSeed = this.bytecodeIntegrityKey ? deriveRuntimeDispatchSeed(this.bytecodeIntegrityKey) : 0
         this.runtimeOpcodeState = this.runtimeDispatchSeed || 0x4f1bbcdc
         this.refreshDispatchTable()
@@ -1075,11 +1122,76 @@ class JSVM {
         return !!(this.memoryProtectionState && this.memoryProtectionState.enabled && register >= registerNames.length);
     }
 
+    rotateProtectedRegisters() {
+        if (!this.memoryProtectionState || !this.memoryProtectionState.enabled) {
+            return this;
+        }
+
+        for (let register = registerNames.length; register < this.registers.length; register++) {
+            if (this.registerRefs.has(register)) {
+                continue;
+            }
+
+            const storedValue = this.registers[register];
+            if (storedValue === null) {
+                continue;
+            }
+
+            const resolvedValue = restoreProtectedRegisterValue(this.memoryProtectionState, register, storedValue, {
+                consume: storedValue && storedValue.__jsvmProtected === true
+            });
+            this.registers[register] = createProtectedRegisterValue(this.memoryProtectionState, register, resolvedValue);
+        }
+
+        return this;
+    }
+
+    captureRegisterSnapshot() {
+        if (!this.memoryProtectionState || !this.memoryProtectionState.enabled) {
+            return this.registers.slice();
+        }
+
+        const snapshot = this.registers.slice();
+        for (let register = registerNames.length; register < snapshot.length; register++) {
+            if (this.registerRefs.has(register)) {
+                continue;
+            }
+
+            const resolvedValue = this.readStored(register);
+            snapshot[register] = resolvedValue === null ? null : createProtectedRegisterValue(this.memoryProtectionState, register, resolvedValue);
+        }
+
+        return snapshot;
+    }
+
+    releaseRegisterSnapshot(snapshot, preservedRegisters = []) {
+        if (!this.memoryProtectionState || !this.memoryProtectionState.enabled || !snapshot) {
+            return this;
+        }
+
+        const preserved = new Set(preservedRegisters);
+        for (let register = registerNames.length; register < snapshot.length; register++) {
+            if (preserved.has(register)) {
+                continue;
+            }
+            const storedValue = snapshot[register];
+            if (storedValue && storedValue.__jsvmProtected === true) {
+                restoreProtectedRegisterValue(this.memoryProtectionState, register, storedValue, {consume: true});
+            }
+        }
+
+        return this;
+    }
+
     readStored(register) {
         if (!this.isProtectedRegister(register)) {
             return this.registers[register]
         }
-        return restoreProtectedRegisterValue(this.memoryProtectionState, register, this.registers[register])
+        const resolvedValue = restoreProtectedRegisterValue(this.memoryProtectionState, register, this.registers[register], {
+            consume: true
+        });
+        this.registers[register] = createProtectedRegisterValue(this.memoryProtectionState, register, resolvedValue);
+        return resolvedValue
     }
 
     writeStored(register, value) {
@@ -1090,7 +1202,29 @@ class JSVM {
             this.registers[register] = value
             return
         }
+        if (this.registers[register] && this.registers[register].__jsvmProtected === true) {
+            restoreProtectedRegisterValue(this.memoryProtectionState, register, this.registers[register], {
+                consume: true
+            });
+        }
         this.registers[register] = createProtectedRegisterValue(this.memoryProtectionState, register, value)
+    }
+
+    clearStoredRegister(register) {
+        if (!this.isProtectedRegister(register)) {
+            this.registers[register] = null
+            return this
+        }
+
+        const storedValue = this.registers[register]
+        if (storedValue && storedValue.__jsvmProtected === true) {
+            restoreProtectedRegisterValue(this.memoryProtectionState, register, storedValue, {
+                consume: true
+            })
+        }
+
+        this.registers[register] = null
+        return this
     }
 
     getOrCreateRegisterReference(register) {
@@ -1099,11 +1233,13 @@ class JSVM {
         }
         const reference = createRegisterReference(this.readStored(register))
         this.registerRefs.set(register, reference)
+        this.clearStoredRegister(register)
         return reference
     }
 
     bindRegisterReference(register, reference) {
         this.registerRefs.set(register, reference)
+        this.clearStoredRegister(register)
         return reference
     }
 
@@ -1112,8 +1248,8 @@ class JSVM {
             return null
         }
         const reference = this.registerRefs.get(register)
-        this.writeStored(register, reference.value)
         this.registerRefs.delete(register)
+        this.writeStored(register, reference.value)
         return reference
     }
 
@@ -1135,15 +1271,33 @@ class JSVM {
         this.writeStored(register, value)
     }
 
+    readRawByte() {
+        const position = this.read(registers.INSTRUCTION_POINTER);
+        const byte = this.code[position];
+        this.registers[registers.INSTRUCTION_POINTER] = position + 1;
+        return byte;
+    }
+
     readByte() {
-        const byte = this.code[this.read(registers.INSTRUCTION_POINTER)]
-        this.registers[registers.INSTRUCTION_POINTER] += 1;
+        const position = this.read(registers.INSTRUCTION_POINTER)
+        const byte = this.code[position]
+        this.registers[registers.INSTRUCTION_POINTER] = position + 1;
+        if (
+            byte !== undefined &&
+            this.perInstructionEncodingEnabled &&
+            this.instructionByteSeed &&
+            this.currentInstructionBase !== null &&
+            position > this.currentInstructionBase
+        ) {
+            return byte ^ createInstructionByteMask(this.instructionByteSeed >>> 0, this.currentInstructionBase >>> 0, position >>> 0);
+        }
         return byte
     }
 
     readOpcode() {
         const position = this.read(registers.INSTRUCTION_POINTER)
-        const opcode = this.readByte()
+        this.currentInstructionBase = position
+        const opcode = this.readRawByte()
 
         if (opcode === undefined) {
             return {
@@ -1205,9 +1359,17 @@ class JSVM {
         return this.readByte() << 24 | this.readByte() << 16 | this.readByte() << 8 | this.readByte()
     }
 
+    readInstructionDecodedByteArray(length) {
+        const bytes = new Uint8Array(length);
+        for (let index = 0; index < length; index++) {
+            bytes[index] = this.readByte();
+        }
+        return bytes;
+    }
+
     readJumpTargetDWORD() {
         const position = this.read(registers.INSTRUCTION_POINTER);
-        const bytes = new Uint8Array([this.readByte(), this.readByte(), this.readByte(), this.readByte()]);
+        const bytes = this.readInstructionDecodedByteArray(4);
 
         if (!this.jumpTargetEncodingEnabled || !this.jumpTargetSeed) {
             return ((bytes[0] << 24) | (bytes[1] << 16) | (bytes[2] << 8) | bytes[3]);
@@ -1260,6 +1422,7 @@ class JSVM {
         code = envelope.payload
         this.statefulOpcodesEnabled = envelope.statefulOpcodes
         this.jumpTargetEncodingEnabled = envelope.jumpTargetEncoding
+        this.perInstructionEncodingEnabled = envelope.perInstructionEncoding
         if (!format) {
 
             this.code = code
@@ -1294,12 +1457,15 @@ class JSVM {
         while (true) {
             const {opcode, position} = this.readOpcode()
             if (opcode === undefined || opNames[opcode] === "END") {
+                this.currentInstructionBase = null
                 break
             }
             this.runAntiDebugSweep(position)
             const handler = this.resolveOpcodeHandler(opcode, position)
             if (!handler) {
                 this.advanceRuntimeOpcodeState(opcode, position)
+                this.rotateProtectedRegisters()
+                this.currentInstructionBase = null
                 continue
             }
             try {
@@ -1309,6 +1475,8 @@ class JSVM {
                 throw e
             } finally {
                 this.advanceRuntimeOpcodeState(opcode, position)
+                this.rotateProtectedRegisters()
+                this.currentInstructionBase = null
             }
         }
     }
@@ -1318,12 +1486,15 @@ class JSVM {
         while (true) {
             const {opcode, position} = this.readOpcode()
             if (opcode === undefined || opNames[opcode] === "END") {
+                this.currentInstructionBase = null
                 break
             }
             this.runAntiDebugSweep(position)
             const handler = this.resolveOpcodeHandler(opcode, position)
             if (!handler) {
                 this.advanceRuntimeOpcodeState(opcode, position)
+                this.rotateProtectedRegisters()
+                this.currentInstructionBase = null
                 continue
             }
 
@@ -1334,6 +1505,8 @@ class JSVM {
                 throw e
             } finally {
                 this.advanceRuntimeOpcodeState(opcode, position)
+                this.rotateProtectedRegisters()
+                this.currentInstructionBase = null
             }
         }
     }

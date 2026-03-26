@@ -99,7 +99,7 @@ const implOpcode = {
             returnDataStore = this.readByte(),
             argMap = this.readArrayRegisters();
         // store current register state for restoration
-        this.regstack.push([this.registers.slice(), returnDataStore, new Map(this.registerRefs)]);
+        this.regstack.push([this.captureRegisterSnapshot(), returnDataStore, new Map(this.registerRefs)]);
         // convert current register positions (rel) to function necessary registers (abs)
         // (abs, rel, abs, rel, ...)
         for (let i = 0; i < argMap.length; i += 2) {
@@ -144,11 +144,12 @@ const implOpcode = {
             const fork = new vm.constructor();
             fork.setBytecodeIntegrityKey(vm.bytecodeIntegrityKey);
             fork.code = vm.code;
-            fork.registers = vm.registers.slice();
+            fork.registers = vm.captureRegisterSnapshot();
             fork.regstack = [];
             fork.registerRefs = new Map(vm.registerRefs);
             fork.statefulOpcodesEnabled = vm.statefulOpcodesEnabled;
             fork.jumpTargetEncodingEnabled = vm.jumpTargetEncodingEnabled;
+            fork.perInstructionEncodingEnabled = vm.perInstructionEncodingEnabled;
             fork.runtimeOpcodeState = vm.runtimeOpcodeState;
             fork.adoptMemoryProtectionState(vm.memoryProtectionState);
             fork.adoptAntiDebugState(vm.antiDebugState);
@@ -179,11 +180,12 @@ const implOpcode = {
             const fork = new vm.constructor();
             fork.setBytecodeIntegrityKey(vm.bytecodeIntegrityKey);
             fork.code = vm.code;
-            fork.registers = vm.registers.slice();
+            fork.registers = vm.captureRegisterSnapshot();
             fork.regstack = [];
             fork.registerRefs = new Map(vm.registerRefs);
             fork.statefulOpcodesEnabled = vm.statefulOpcodesEnabled;
             fork.jumpTargetEncodingEnabled = vm.jumpTargetEncodingEnabled;
+            fork.perInstructionEncodingEnabled = vm.perInstructionEncodingEnabled;
             fork.runtimeOpcodeState = vm.runtimeOpcodeState;
             fork.adoptMemoryProtectionState(vm.memoryProtectionState);
             fork.adoptAntiDebugState(vm.antiDebugState);
@@ -230,6 +232,7 @@ const implOpcode = {
         for (const restoreRegister of restoreRegisters) {
             this.registers[restoreRegister] = oldRegisters[restoreRegister];
         }
+        this.releaseRegisterSnapshot(oldRegisters, restoreRegisters);
         if (oldRegisterRefs) {
             this.registerRefs = oldRegisterRefs;
         }

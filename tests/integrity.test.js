@@ -21,7 +21,11 @@ const zlib = require("node:zlib");
 
 const JSVM = require("../src/vm_dev");
 const {transpile} = require("../src/transpile");
-const {VMChunk, Opcode, encodeDWORD} = require("../src/utils/assembler");
+const {VMChunk, Opcode, encodeDWORD, encodeString} = require("../src/utils/assembler");
+
+function runNodeScript(filePath, options = {}) {
+    return childProcess.execFileSync("node", [filePath], options).toString();
+}
 
 function applyStatefulOpcodeEncoding(chunk, seed) {
     let position = 0;
@@ -60,6 +64,17 @@ function applyJumpTargetEncoding(chunk, seed) {
                 const encoded = JSVM.encodeJumpTargetBytes(opcode.data.slice(offset, offset + 4), position + 1 + offset, seed);
                 encoded.copy(opcode.data, offset);
             }
+        }
+        position += opcode.toBytes().length;
+    }
+}
+
+function applyPerInstructionEncoding(chunk, seed) {
+    let position = 0;
+
+    for (const opcode of chunk.code) {
+        if (opcode.data.length > 0) {
+            opcode.data = JSVM.encodeInstructionBytes(opcode.data, position, seed);
         }
         position += opcode.toBytes().length;
     }
@@ -121,10 +136,12 @@ describe("bytecode integrity", () => {
         const salt = "feedc0de";
         const opcodeSeed = JSVM.deriveOpcodeStateSeed(integrityKey);
         const jumpSeed = JSVM.deriveJumpTargetSeed(integrityKey);
+        const instructionSeed = JSVM.deriveInstructionByteSeed(integrityKey);
 
         chunk.append(new Opcode("LOAD_DWORD", 3, encodeDWORD(1337)));
         applyStatefulOpcodeEncoding(chunk, opcodeSeed);
         applyJumpTargetEncoding(chunk, jumpSeed);
+        applyPerInstructionEncoding(chunk, instructionSeed);
 
         const encryptedBytecode = JSVM.createEncryptedBytecodeEnvelope(
             zlib.deflateSync(Buffer.from(chunk.toBytes())).toString("base64"),
@@ -133,7 +150,7 @@ describe("bytecode integrity", () => {
             bytecodeKeyId,
             bytecodeKey,
             salt,
-            "SJ"
+            "IJS"
         );
 
         JSVM.registerBytecodeKey(bytecodeKeyId, bytecodeKey);
@@ -152,10 +169,12 @@ describe("bytecode integrity", () => {
         const salt = "feedc0de";
         const opcodeSeed = JSVM.deriveOpcodeStateSeed(integrityKey);
         const jumpSeed = JSVM.deriveJumpTargetSeed(integrityKey);
+        const instructionSeed = JSVM.deriveInstructionByteSeed(integrityKey);
 
         chunk.append(new Opcode("LOAD_DWORD", 3, encodeDWORD(1337)));
         applyStatefulOpcodeEncoding(chunk, opcodeSeed);
         applyJumpTargetEncoding(chunk, jumpSeed);
+        applyPerInstructionEncoding(chunk, instructionSeed);
 
         const encryptedBytecode = JSVM.createEncryptedBytecodeEnvelope(
             zlib.deflateSync(Buffer.from(chunk.toBytes())).toString("base64"),
@@ -164,7 +183,7 @@ describe("bytecode integrity", () => {
             bytecodeKeyId,
             "runtime-secret-key",
             salt,
-            "SJ"
+            "IJS"
         );
 
         vm.setBytecodeIntegrityKey(integrityKey);
@@ -181,6 +200,7 @@ describe("bytecode integrity", () => {
         const salt = "c0ffee42";
         const opcodeSeed = JSVM.deriveOpcodeStateSeed(integrityKey);
         const jumpSeed = JSVM.deriveJumpTargetSeed(integrityKey);
+        const instructionSeed = JSVM.deriveInstructionByteSeed(integrityKey);
 
         chunk.append(new Opcode("LOAD_BOOL", 3, 1));
         chunk.append(new Opcode("JUMP_EQ", 3, encodeDWORD(13)));
@@ -191,6 +211,7 @@ describe("bytecode integrity", () => {
 
         applyStatefulOpcodeEncoding(chunk, opcodeSeed);
         applyJumpTargetEncoding(chunk, jumpSeed);
+        applyPerInstructionEncoding(chunk, instructionSeed);
 
         const encryptedBytecode = JSVM.createEncryptedBytecodeEnvelope(
             zlib.deflateSync(Buffer.from(chunk.toBytes())).toString("base64"),
@@ -199,7 +220,7 @@ describe("bytecode integrity", () => {
             bytecodeKeyId,
             bytecodeKey,
             salt,
-            "SJ"
+            "IJS"
         );
 
         JSVM.registerBytecodeKey(bytecodeKeyId, bytecodeKey);
@@ -208,6 +229,42 @@ describe("bytecode integrity", () => {
         vm.run();
 
         expect(vm.registers[4]).toBe(42);
+    });
+
+    test("loads encrypted bytecode with per-instruction decoding", () => {
+        const vm = new JSVM();
+        const chunk = new VMChunk();
+        const integrityKey = "instruction-integrity-key";
+        const bytecodeKeyId = "JSVK_INST";
+        const bytecodeKey = "instruction-runtime-secret";
+        const salt = "abcddcba";
+        const opcodeSeed = JSVM.deriveOpcodeStateSeed(integrityKey);
+        const jumpSeed = JSVM.deriveJumpTargetSeed(integrityKey);
+        const instructionSeed = JSVM.deriveInstructionByteSeed(integrityKey);
+
+        chunk.append(new Opcode("LOAD_STRING", 5, encodeString("test")));
+        chunk.append(new Opcode("END"));
+
+        applyStatefulOpcodeEncoding(chunk, opcodeSeed);
+        applyJumpTargetEncoding(chunk, jumpSeed);
+        applyPerInstructionEncoding(chunk, instructionSeed);
+
+        const encryptedBytecode = JSVM.createEncryptedBytecodeEnvelope(
+            zlib.deflateSync(Buffer.from(chunk.toBytes())).toString("base64"),
+            "base64",
+            integrityKey,
+            bytecodeKeyId,
+            bytecodeKey,
+            salt,
+            "IJS"
+        );
+
+        JSVM.registerBytecodeKey(bytecodeKeyId, bytecodeKey);
+        vm.setBytecodeIntegrityKey(integrityKey);
+        vm.loadFromString(encryptedBytecode, "base64");
+        vm.run();
+
+        expect(vm.registers[5]).toBe("test");
     });
 
     test("virtualized wrappers fail fast when protected payload is modified", async () => {
@@ -245,9 +302,9 @@ console.log(protectedResult());
 
         fs.writeFileSync(tamperedOutputPath, tampered);
 
-        const originalOutput = childProcess.execSync(`node ${originalOutputPath}`).toString().trim();
+        const originalOutput = runNodeScript(originalOutputPath).trim();
         expect(originalOutput).toBe("42");
 
-        expect(() => childProcess.execSync(`node ${tamperedOutputPath}`, {stdio: "pipe"})).toThrow(/Bytecode integrity check failed/);
+        expect(() => runNodeScript(tamperedOutputPath, {stdio: "pipe"})).toThrow(/Bytecode integrity check failed/);
     });
 });

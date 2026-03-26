@@ -170,18 +170,21 @@ Generated virtualized wrappers also enable protected register storage and dead b
 | Obfuscation | macro opcodes / superinstructions | ✅ | common traces such as paired literal loads and test+jump sequences are fused into synthesized macro-opcodes |
 | Obfuscation | runtime opcode derivation | ✅ | decoded opcodes resolve through runtime-selected alias slots driven by evolving dispatcher state |
 | Obfuscation | dedicated VM anti-debug layer | ✅ | VM instances can arm timing-gap and DevTools heuristics that perturb dispatcher state and optionally trigger debugger traps |
+| Obfuscation | per-instruction bytecode encoding | ✅ | protected instruction payload bytes are decoded just-in-time during VM execution using a per-function seed |
+| Obfuscation | stack-lane encoding equivalent | ✅ | protected register wrappers rotate on protected reads/writes and after each VM step to avoid stable stored values |
+| Runtime | automatic top-level initializer virtualization | ✅ | safe top-level variable initializers are auto-wrapped into helper VMs without requiring `// @virtualize` markers |
 
-## Roadmap
+## VM Hardening Parity Tracker
 
 The project already ships several VM hardening layers such as opcode remapping, bytecode integrity checks, string encryption, dead bytecode injection, argument scrambling, and protected register storage.
 
-The following VM-oriented techniques used by commercial protectors such as Obfuscator.io are still not implemented here:
+The following VM-oriented techniques were tracked against commercial protectors such as Obfuscator.io and are now implemented here:
 
 | Technique | Priority | Status | Notes |
 | --- | --- | --- | --- |
-| per-instruction bytecode encoding | P2 | ❌ | protected payloads are validated and decoded at load time, but individual instructions are not decoded just-in-time during execution |
-| stack-lane encoding equivalent | P2 | ❌ | protected register storage exists, but values are not re-encoded on every push/pop or per-step register access |
-| automatic top-level initializer virtualization | P2 | ❌ | useful for coverage and convenience, but lower priority than core VM hardening layers |
+| per-instruction bytecode encoding | P2 | ✅ | instruction payload bytes are encoded in the protected payload and decoded only as each instruction executes |
+| stack-lane encoding equivalent | P2 | ✅ | protected register wrappers are re-keyed across protected access paths and VM steps instead of staying stable in memory |
+| automatic top-level initializer virtualization | P2 | ✅ | safe top-level variable initializers are virtualized automatically; complex runtime-heavy initializers are intentionally left as plain JS |
 
 ## Limitations
 
@@ -190,5 +193,6 @@ The following VM-oriented techniques used by commercial protectors such as Obfus
 
 - performance is not guaranteed. js-virtualizer is not intended for high-performance paths or whole-program virtualization; it is better suited to protecting selected functions where slowdown is acceptable
 - the distributed VM is still realistically reversible if shipped as-is. Obfuscating or hardening the VM runtime is still recommended for production use
-- anti-analysis layers are still incomplete. Integrity checks, keyed payload encryption, jump-target encoding, indirect/derived dispatch, macro-op fusion, dead code, anti-debug heuristics, and protected register storage raise the bar, but the remaining roadmap items above are still missing
+- anti-analysis layers are still heuristic rather than bulletproof. Integrity checks, keyed payload encryption, jump-target encoding, indirect/derived dispatch, macro-op fusion, dead code, anti-debug heuristics, and protected register storage raise the bar, but they do not make the VM equivalent to a commercial protector
+- automatic top-level initializer virtualization is intentionally conservative. Safe initializer shapes are virtualized automatically, while complex runtime-heavy initializers stay as plain JavaScript to avoid semantic or temp-register regressions
 - syntax outside the support matrix, especially proposal-era or otherwise untested constructs, may still fail even when nearby standardized syntax works

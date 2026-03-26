@@ -217,6 +217,153 @@ function preprocessVirtualizedFunctionsInNode(node, code, needToVirtualize) {
     }
 }
 
+function createTopLevelHelperName(prefix) {
+    return `__jsv_top_${prefix}_${crypto.randomBytes(5).toString("hex")}`;
+}
+
+function nodeContainsSyntax(node, visitorMap) {
+    let found = false;
+    walk.simple(node, Object.fromEntries(Object.keys(visitorMap).map((key) => [key, () => {
+        found = true;
+    }])));
+    return found;
+}
+
+function shouldSkipTopLevelVirtualizationExpression(node) {
+    if (!node) {
+        return true;
+    }
+
+    const hasUnsupportedSyntax = nodeContainsSyntax(node, {
+        AwaitExpression: true,
+        Super: true,
+        YieldExpression: true
+    });
+
+    if (hasUnsupportedSyntax) {
+        return true;
+    }
+
+    function isSupportedTopLevelInitializerExpression(expression) {
+        if (!expression) {
+            return false;
+        }
+
+        switch (expression.type) {
+            case "Literal":
+            case "Identifier":
+            case "ThisExpression":
+                return true;
+            case "UnaryExpression":
+                return isSupportedTopLevelInitializerExpression(expression.argument);
+            case "BinaryExpression":
+            case "LogicalExpression":
+                return isSupportedTopLevelInitializerExpression(expression.left) &&
+                    isSupportedTopLevelInitializerExpression(expression.right);
+            case "ConditionalExpression":
+                return isSupportedTopLevelInitializerExpression(expression.test) &&
+                    isSupportedTopLevelInitializerExpression(expression.consequent) &&
+                    isSupportedTopLevelInitializerExpression(expression.alternate);
+            case "MemberExpression":
+                return !expression.optional &&
+                    isSupportedTopLevelInitializerExpression(expression.object) &&
+                    (!expression.computed || isSupportedTopLevelInitializerExpression(expression.property));
+            case "TemplateLiteral":
+                return expression.expressions.every((part) => isSupportedTopLevelInitializerExpression(part));
+            default:
+                return false;
+        }
+    }
+
+    return !isSupportedTopLevelInitializerExpression(node);
+}
+
+function createTopLevelHelperCall(name) {
+    return {
+        type: "CallExpression",
+        optional: false,
+        callee: {
+            type: "MemberExpression",
+            object: {
+                type: "Identifier",
+                name
+            },
+            property: {
+                type: "Identifier",
+                name: "call"
+            },
+            computed: false,
+            optional: false
+        },
+        arguments: [{
+            type: "ThisExpression"
+        }]
+    };
+}
+
+function createTopLevelVirtualizedHelper(name, expression) {
+    return {
+        type: "FunctionDeclaration",
+        id: {
+            type: "Identifier",
+            name
+        },
+        params: [],
+        generator: false,
+        async: false,
+        expression: false,
+        body: {
+            type: "BlockStatement",
+            body: [{
+                type: "ReturnStatement",
+                argument: expression
+            }]
+        },
+        __virtualize: true
+    };
+}
+
+function rewriteTopLevelVariableDeclaration(statement, helpers) {
+    let changed = false;
+
+    for (const declarator of statement.declarations) {
+        if (!declarator.init || shouldSkipTopLevelVirtualizationExpression(declarator.init)) {
+            continue;
+        }
+
+        const helperName = createTopLevelHelperName("init");
+        helpers.push(createTopLevelVirtualizedHelper(helperName, declarator.init));
+        declarator.init = createTopLevelHelperCall(helperName);
+        changed = true;
+    }
+
+    return changed;
+}
+
+function injectAutomaticTopLevelVirtualization(programBody) {
+    const rewritten = [];
+
+    for (const statement of programBody) {
+        const helpers = [];
+
+        if (statement.type === "VariableDeclaration") {
+            rewriteTopLevelVariableDeclaration(statement, helpers);
+            rewritten.push(...helpers, statement);
+            continue;
+        }
+
+        if (statement.type === "ExportNamedDeclaration" && statement.declaration?.type === "VariableDeclaration") {
+            rewriteTopLevelVariableDeclaration(statement.declaration, helpers);
+            rewritten.push(...helpers, statement);
+            continue;
+        }
+
+        rewritten.push(statement);
+    }
+
+    programBody.splice(0, programBody.length, ...rewritten);
+}
+
 function createArgumentScramblingPlan(paramNames) {
     if (paramNames.length === 0) {
         return {
@@ -359,6 +506,17 @@ function applyJumpTargetEncoding(chunk, seed) {
     }
 }
 
+function applyPerInstructionEncoding(chunk, seed) {
+    let position = 0;
+
+    for (const opcode of chunk.code) {
+        if (opcode.data.length > 0) {
+            opcode.data = JSVM.encodeInstructionBytes(opcode.data, position, seed);
+        }
+        position += opcode.toBytes().length;
+    }
+}
+
 async function transpile(code, options) {
     options = options ?? {};
     options.decoratorsMode = options.decoratorsMode ?? "legacy";
@@ -391,6 +549,8 @@ async function transpile(code, options) {
         ranges: true,
     });
 
+    injectAutomaticTopLevelVirtualization(ast.body);
+
     const vmAST = acorn.parse(vmDist, {ecmaVersion: "latest", sourceType: "module"})
 
     let vmRelativePath = path.relative(path.dirname(options.transpiledOutputPath), options.vmOutputPath)
@@ -402,6 +562,9 @@ async function transpile(code, options) {
     ast.body.unshift(acorn.parse(requireInject, {ecmaVersion: "latest", sourceType: "module"}).body[0])
 
     function needToVirtualize(node) {
+        if (!node || !node.loc || !node.loc.start) {
+            return false;
+        }
         return comments.some((comment) => {
             return (
                 comment.type === "Line" &&
@@ -574,11 +737,13 @@ async function transpile(code, options) {
     rewriteQueue.forEach(({result, node, chunk, integrityKey, bytecodeKeyId, bytecodeEncryptionKey}) => {
         const opcodeSeed = JSVM.deriveOpcodeStateSeed(integrityKey);
         const jumpSeed = JSVM.deriveJumpTargetSeed(integrityKey);
+        const instructionSeed = JSVM.deriveInstructionByteSeed(integrityKey);
         applyStatefulOpcodeEncoding(chunk, opcodeSeed);
         applyJumpTargetEncoding(chunk, jumpSeed);
+        applyPerInstructionEncoding(chunk, instructionSeed);
         const bytecode = zlib.deflateSync(Buffer.from(chunk.toBytes())).toString(encoding);
         const integritySalt = crypto.randomBytes(8).toString("hex");
-        const protectedBytecode = JSVM.createEncryptedBytecodeEnvelope(bytecode, encoding, integrityKey, bytecodeKeyId, bytecodeEncryptionKey, integritySalt, "SJ");
+        const protectedBytecode = JSVM.createEncryptedBytecodeEnvelope(bytecode, encoding, integrityKey, bytecodeKeyId, bytecodeEncryptionKey, integritySalt, "IJS");
         result = result.replace("%BYTECODE%", protectedBytecode);
         node.body.body = acorn.parse(result, {ecmaVersion: "latest", sourceType: "module"}).body[0].body.body
     })

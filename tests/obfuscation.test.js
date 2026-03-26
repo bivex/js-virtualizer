@@ -30,6 +30,10 @@ function extractWrapperValue(pattern, source) {
     return match[1];
 }
 
+function runNodeScript(filePath, options = {}) {
+    return childProcess.execFileSync("node", [filePath], options).toString();
+}
+
 function registerExternalBytecodeKeys(vmSource) {
     const registrations = [...vmSource.matchAll(/registerBytecodeKey\('([^']+)',\s*'([^']+)'\)/g)];
 
@@ -103,8 +107,8 @@ console.log(demo("alpha", undefined, "gamma", "delta"));
 
         expect(result.transpiled).toContain("__jsv_arg_");
 
-        const originalOutput = childProcess.execSync(`node ${sourcePath}`).toString();
-        const virtualizedOutput = childProcess.execSync(`node ${transpiledOutputPath}`).toString();
+        const originalOutput = runNodeScript(sourcePath);
+        const virtualizedOutput = runNodeScript(transpiledOutputPath);
 
         expect(virtualizedOutput).toBe(originalOutput);
         expect(virtualizedOutput.trim()).toBe("alpha|fallback|gamma|delta");
@@ -141,8 +145,8 @@ console.log(demo());
             passes: ["RemoveUnused"]
         });
 
-        const originalOutput = childProcess.execSync(`node ${sourcePath}`).toString();
-        const virtualizedOutput = childProcess.execSync(`node ${transpiledOutputPath}`).toString();
+        const originalOutput = runNodeScript(sourcePath);
+        const virtualizedOutput = runNodeScript(transpiledOutputPath);
 
         expect(virtualizedOutput).toBe(originalOutput);
         expect(virtualizedOutput.trim()).toBe("alpha|fallback|gamma|delta");
@@ -190,6 +194,7 @@ console.log(demo());
             expect(result.transpiled).toContain(keyId);
         }
         expect(result.transpiled).toContain("JSCX1:");
+        expect(result.transpiled).toContain(":IJS:");
     });
 
     test("synthesizes macro opcodes for common opcode traces", async () => {
@@ -242,18 +247,26 @@ console.log(demo(true));
         expect(vm.runtimeOpcodeState).not.toBe(previousState);
     });
 
-    test("protects register storage and restores values on read", () => {
+    test("protects register storage and rotates wrappers on access", () => {
         const vm = new JSVM().enableMemoryProtection("memory-guard");
         const marker = {kind: "probe"};
 
         vm.write(7, marker);
         vm.write(8, "masked-value");
+        const firstWrapper = vm.registers[8];
 
         expect(vm.registers[7]).not.toBe(marker);
         expect(vm.registers[8]).not.toBe("masked-value");
         expect(vm.read(7)).toBe(marker);
         expect(vm.read(8)).toBe("masked-value");
+        expect(vm.registers[8]).not.toBe(firstWrapper);
 
+        vm.registers[8] = firstWrapper;
+
+        expect(() => vm.read(8)).toThrow("VM register protection token missing");
+
+        vm.registers[8] = null;
+        vm.write(8, "masked-value");
         vm.registers[8] = {
             ...vm.registers[8],
             guard: vm.registers[8].guard ^ 1
