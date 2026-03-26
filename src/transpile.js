@@ -276,6 +276,15 @@ function injectDeadCode(chunk) {
     decoySequence.forEach((opcode) => chunk.append(opcode));
 }
 
+function applyStatefulOpcodeEncoding(chunk, seed) {
+    let position = 0;
+
+    for (const opcode of chunk.code) {
+        opcode.opcode = Buffer.from([JSVM.encodeStatefulOpcode(opcode.opcode[0], position, seed)]);
+        position += opcode.toBytes().length;
+    }
+}
+
 async function transpile(code, options) {
     options = options ?? {};
     options.decoratorsMode = options.decoratorsMode ?? "legacy";
@@ -350,6 +359,8 @@ async function transpile(code, options) {
         log(new LogData(`Virtualizing Function "${node.id.name}"`, 'info', false));
         const dependencies = analyzeScope(ast, node);
         const integrityKey = crypto.randomBytes(16).toString("hex");
+        const bytecodeKeyId = `JSVK_${crypto.randomBytes(6).toString("hex")}`;
+        const bytecodeEncryptionKey = crypto.randomBytes(24).toString("base64");
         const memoryProtectionKey = crypto.randomBytes(16).toString("hex");
         const usesArguments = usesIdentifier(node.body, "arguments");
         const usesThis = (() => {
@@ -465,7 +476,9 @@ async function transpile(code, options) {
             result: virtualizedFunction,
             node,
             chunk: generator.chunk,
-            integrityKey
+            integrityKey,
+            bytecodeKeyId,
+            bytecodeEncryptionKey
         })
     }
 
@@ -481,15 +494,23 @@ async function transpile(code, options) {
         obfuscateOpcodes(chunks, vmAST)
     }
 
-    rewriteQueue.forEach(({result, node, chunk, integrityKey}) => {
+    rewriteQueue.forEach(({result, node, chunk, integrityKey, bytecodeKeyId, bytecodeEncryptionKey}) => {
+        const opcodeSeed = JSVM.deriveOpcodeStateSeed(integrityKey);
+        applyStatefulOpcodeEncoding(chunk, opcodeSeed);
         const bytecode = zlib.deflateSync(Buffer.from(chunk.toBytes())).toString(encoding);
         const integritySalt = crypto.randomBytes(8).toString("hex");
-        const protectedBytecode = JSVM.createBytecodeIntegrityEnvelope(bytecode, encoding, integrityKey, integritySalt);
+        const protectedBytecode = JSVM.createEncryptedBytecodeEnvelope(bytecode, encoding, integrityKey, bytecodeKeyId, bytecodeEncryptionKey, integritySalt);
         result = result.replace("%BYTECODE%", protectedBytecode);
         node.body.body = acorn.parse(result, {ecmaVersion: "latest", sourceType: "module"}).body[0].body.body
     })
 
     let accompanyingVM = escodegen.generate(vmAST);
+    const bytecodeKeyRegistrations = rewriteQueue
+        .map(({bytecodeKeyId, bytecodeEncryptionKey}) => `JSVM.registerBytecodeKey('${bytecodeKeyId}', '${bytecodeEncryptionKey}');`)
+        .join("\n");
+    if (bytecodeKeyRegistrations.length > 0) {
+        accompanyingVM = `${accompanyingVM}\n${bytecodeKeyRegistrations}\n`;
+    }
     let transpiledResult = escodegen.generate(ast);
 
     if (options.passes.has("ObfuscateVM")) {

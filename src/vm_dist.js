@@ -34,6 +34,8 @@ const zlib = (() => {
 })();
 
 const BYTECODE_INTEGRITY_PREFIX = "JSCI1";
+const BYTECODE_ENCRYPTED_PREFIX = "JSCX1";
+const bytecodeKeyRegistry = new Map();
 
 function rotateLeft(value, shift) {
     return ((value << shift) | (value >>> (32 - shift))) >>> 0;
@@ -74,9 +76,174 @@ function createBytecodeIntegrityDigest(payload, salt, key, format) {
         .join("");
 }
 
+function createSeedFromString(input, initial = 0x9e3779b9) {
+    const normalizedInput = String(input ?? "");
+    let seed = initial >>> 0;
+
+    for (let i = 0; i < normalizedInput.length; i++) {
+        seed = Math.imul((seed ^ normalizedInput.charCodeAt(i) ^ i) >>> 0, 0x45d9f3b) >>> 0;
+        seed = rotateLeft(seed, 7);
+    }
+
+    return seed >>> 0;
+}
+
+function createSeededPermutation(length, seed) {
+    const permutation = Array.from({length}, (_, index) => index);
+    let state = (seed >>> 0) || 0x9e3779b9;
+
+    for (let index = permutation.length - 1; index > 0; index--) {
+        state = Math.imul((state ^ (state >>> 15)) >>> 0, 0x2c1b3c6d) >>> 0;
+        state = (state + 0x9e3779b9 + index) >>> 0;
+        const swapIndex = state % (index + 1);
+        [permutation[index], permutation[swapIndex]] = [permutation[swapIndex], permutation[index]];
+    }
+
+    return permutation;
+}
+
+function encodeUtf8(value) {
+    if (nodeBuffer) {
+        return nodeBuffer.from(String(value ?? ""), "utf8");
+    }
+
+    if (typeof TextEncoder !== "undefined") {
+        return new TextEncoder().encode(String(value ?? ""));
+    }
+
+    const normalizedValue = String(value ?? "");
+    const bytes = new Uint8Array(normalizedValue.length);
+    for (let i = 0; i < normalizedValue.length; i++) {
+        bytes[i] = normalizedValue.charCodeAt(i) & 0xFF;
+    }
+    return bytes;
+}
+
+function decodeUtf8(bytes) {
+    if (nodeBuffer) {
+        return nodeBuffer.from(bytes).toString("utf8");
+    }
+
+    if (typeof TextDecoder !== "undefined") {
+        return new TextDecoder().decode(bytes);
+    }
+
+    return Array.from(bytes, (byte) => String.fromCharCode(byte)).join("");
+}
+
+function createBytecodeCipherBytes(input, key, salt) {
+    const normalizedKey = String(key ?? "");
+    if (!normalizedKey) {
+        throw new Error("VM decryption key not available");
+    }
+
+    const normalizedSalt = String(salt ?? "");
+    const data = input instanceof Uint8Array ? input : new Uint8Array(input);
+    const output = new Uint8Array(data.length);
+    let stateA = createSeedFromString(`${normalizedKey}:${normalizedSalt}`, 0x243f6a88);
+    let stateB = createSeedFromString(`${normalizedSalt}:${normalizedKey}`, 0x85a308d3);
+
+    for (let i = 0; i < data.length; i++) {
+        const keyCode = normalizedKey.charCodeAt(i % normalizedKey.length);
+        const saltCode = normalizedSalt.length > 0 ? normalizedSalt.charCodeAt(i % normalizedSalt.length) : 0;
+
+        stateA = Math.imul((stateA ^ keyCode ^ i) >>> 0, 0x27d4eb2d) >>> 0;
+        stateA = rotateLeft(stateA, 5);
+        stateB = Math.imul((stateB + saltCode + i + (stateA & 0xff)) >>> 0, 0x165667b1) >>> 0;
+        stateB = rotateLeft(stateB, 9);
+
+        output[i] = data[i] ^ ((stateA ^ stateB ^ keyCode ^ saltCode ^ (i * 17)) & 0xFF);
+    }
+
+    return output;
+}
+
+function deriveOpcodeStateSeed(key) {
+    return createSeedFromString(`opcode:${String(key ?? "")}`, 0x6d2b79f5) || 0x6d2b79f5;
+}
+
+function createOpcodePositionMask(seed, position) {
+    let state = (seed ^ Math.imul((position + 1) >>> 0, 0x9e3779b1)) >>> 0;
+    state = rotateLeft(state, position % 23 + 5);
+    state ^= state >>> 16;
+    return state & 0xFF;
+}
+
+function decodeStatefulOpcode(opcode, position, seed) {
+    return (opcode ^ createOpcodePositionMask(seed >>> 0, position >>> 0)) & 0xFF;
+}
+
+function isBase64Like(value) {
+    return typeof value === "string" && /^[A-Za-z0-9+/=]+$/.test(value);
+}
+
+function resolveRegisteredBytecodeKey(keyId) {
+    const normalizedKeyId = String(keyId ?? "");
+
+    if (bytecodeKeyRegistry.has(normalizedKeyId)) {
+        return bytecodeKeyRegistry.get(normalizedKeyId);
+    }
+
+    if (globalScope.__JSV_BYTECODE_KEYS && normalizedKeyId in globalScope.__JSV_BYTECODE_KEYS) {
+        return String(globalScope.__JSV_BYTECODE_KEYS[normalizedKeyId]);
+    }
+
+    if (typeof process !== "undefined" && process.env && process.env[normalizedKeyId]) {
+        return String(process.env[normalizedKeyId]);
+    }
+
+    throw new Error("VM decryption key not available");
+}
+
 function unpackBytecodeEnvelope(code, format, key) {
-    if (typeof code !== "string" || !code.startsWith(`${BYTECODE_INTEGRITY_PREFIX}:`)) {
-        return code;
+    if (typeof code !== "string") {
+        return {
+            payload: code,
+            encrypted: false,
+            statefulOpcodes: false
+        };
+    }
+
+    if (code.startsWith(`${BYTECODE_ENCRYPTED_PREFIX}:`)) {
+        const start = BYTECODE_ENCRYPTED_PREFIX.length + 1;
+        const saltEnd = code.indexOf(":", start);
+        const keyIdEnd = saltEnd === -1 ? -1 : code.indexOf(":", saltEnd + 1);
+        const digestEnd = keyIdEnd === -1 ? -1 : code.indexOf(":", keyIdEnd + 1);
+
+        if (saltEnd === -1 || keyIdEnd === -1 || digestEnd === -1) {
+            throw new Error("Malformed protected bytecode envelope");
+        }
+
+        const salt = code.slice(start, saltEnd);
+        const keyId = code.slice(saltEnd + 1, keyIdEnd);
+        const expectedDigest = code.slice(keyIdEnd + 1, digestEnd);
+        const payload = code.slice(digestEnd + 1);
+        const actualDigest = createBytecodeIntegrityDigest(`${keyId}:${payload}`, salt, key, format);
+
+        if (expectedDigest !== actualDigest) {
+            throw new Error("Bytecode integrity check failed");
+        }
+
+        const decryptionKey = resolveRegisteredBytecodeKey(keyId);
+        const decryptedPayload = decodeUtf8(createBytecodeCipherBytes(decodeBase64ToBytes(payload), decryptionKey, salt));
+
+        if (format === "base64" && !isBase64Like(decryptedPayload)) {
+            throw new Error("VM bytecode decryption failed");
+        }
+
+        return {
+            payload: decryptedPayload,
+            encrypted: true,
+            statefulOpcodes: true
+        };
+    }
+
+    if (!code.startsWith(`${BYTECODE_INTEGRITY_PREFIX}:`)) {
+        return {
+            payload: code,
+            encrypted: false,
+            statefulOpcodes: false
+        };
     }
 
     const start = BYTECODE_INTEGRITY_PREFIX.length + 1;
@@ -96,7 +263,11 @@ function unpackBytecodeEnvelope(code, format, key) {
         throw new Error("Bytecode integrity check failed");
     }
 
-    return payload;
+    return {
+        payload,
+        encrypted: false,
+        statefulOpcodes: false
+    };
 }
 
 function createMemoryProtectionState(key) {
@@ -297,39 +468,44 @@ const implOpcode = {
         }
 
         function runSync(thisArg, args) {
-            vm.regstack.push([vm.registers.slice(), returnDataStore, new Map(vm.registerRefs)]);
-            bindCaptureReferences(vm);
+            const fork = new vm.constructor();
+            fork.setBytecodeIntegrityKey(vm.bytecodeIntegrityKey);
+            fork.code = vm.code;
+            fork.registers = vm.registers.slice();
+            fork.regstack = [];
+            fork.registerRefs = new Map(vm.registerRefs);
+            fork.statefulOpcodesEnabled = vm.statefulOpcodesEnabled;
+            fork.adoptMemoryProtectionState(vm.memoryProtectionState);
+            bindCaptureReferences(fork);
             const restIndex = argOrder.length - 1;
             if (hasDynamicThis) {
-                vm.write(thisRegister, thisArg);
+                fork.write(thisRegister, thisArg);
             }
             if (usesArguments) {
-                vm.write(argumentsRegister, args);
+                fork.write(argumentsRegister, args);
             }
             for (let i = 0; i < argArrayMapper.length; i++) {
                 const sourceIndex = argOrder[i];
                 if (useRest && sourceIndex === restIndex) {
-                    vm.write(argArrayMapper[i], args.slice(sourceIndex));
+                    fork.write(argArrayMapper[i], args.slice(sourceIndex));
                     continue;
                 }
-                vm.write(argArrayMapper[i], args[sourceIndex]);
+                fork.write(argArrayMapper[i], args[sourceIndex]);
             }
-            vm.registers[registers.INSTRUCTION_POINTER] = cur + fnOffset - 1;
-            vm.run()
-            const res = vm.read(returnDataStore);
-            const [oldRegisters, _, oldRegisterRefs] = vm.regstack.pop();
-            vm.registers = oldRegisters;
-            vm.registerRefs = oldRegisterRefs;
-
+            fork.registers[registers.INSTRUCTION_POINTER] = cur + fnOffset - 1;
+            fork.run()
+            const res = fork.read(returnDataStore);
             return res
         }
 
         async function runAsync(thisArg, args) {
             const fork = new vm.constructor();
+            fork.setBytecodeIntegrityKey(vm.bytecodeIntegrityKey);
             fork.code = vm.code;
             fork.registers = vm.registers.slice();
             fork.regstack = [];
             fork.registerRefs = new Map(vm.registerRefs);
+            fork.statefulOpcodesEnabled = vm.statefulOpcodesEnabled;
             fork.adoptMemoryProtectionState(vm.memoryProtectionState);
             bindCaptureReferences(fork);
             const restIndex = argOrder.length - 1;
@@ -606,8 +782,12 @@ class JSVM {
         this.registers = new Array(256).fill(null)
         this.regstack = []
         this.opcodes = {}
+        this.dispatchHandlers = []
+        this.dispatchLookup = []
         this.code = null
         this.bytecodeIntegrityKey = ""
+        this.opcodeStateSeed = 0
+        this.statefulOpcodesEnabled = false
         this.memoryProtectionState = null
         this.registerRefs = new Map()
         this.executionMode = "sync"
@@ -617,6 +797,7 @@ class JSVM {
         Object.keys(opcodes).forEach((opcode) => {
             this.opcodes[opcodes[opcode]] = implOpcode[opcode].bind(this)
         })
+        this.refreshDispatchTable()
     }
 
     static createBytecodeIntegrityDigest(code, salt, key, format) {
@@ -629,8 +810,27 @@ class JSVM {
         return `${BYTECODE_INTEGRITY_PREFIX}:${normalizedSalt}:${digest}:${code}`;
     }
 
+    static registerBytecodeKey(keyId, key) {
+        bytecodeKeyRegistry.set(String(keyId ?? ""), String(key ?? ""));
+        return this
+    }
+
+    refreshDispatchTable() {
+        const permutation = createSeededPermutation(opNames.length, this.opcodeStateSeed || 0x9e3779b9);
+        this.dispatchHandlers = new Array(opNames.length);
+        this.dispatchLookup = new Array(opNames.length);
+
+        for (let slot = 0; slot < permutation.length; slot++) {
+            const opcode = permutation[slot];
+            this.dispatchLookup[opcode] = slot;
+            this.dispatchHandlers[slot] = this.opcodes[opcode];
+        }
+    }
+
     setBytecodeIntegrityKey(key) {
         this.bytecodeIntegrityKey = String(key ?? "")
+        this.opcodeStateSeed = this.bytecodeIntegrityKey ? deriveOpcodeStateSeed(this.bytecodeIntegrityKey) : 0
+        this.refreshDispatchTable()
         return this
     }
 
@@ -726,6 +926,38 @@ class JSVM {
         return byte
     }
 
+    readOpcode() {
+        const position = this.read(registers.INSTRUCTION_POINTER)
+        const opcode = this.readByte()
+
+        if (opcode === undefined) {
+            return {
+                opcode,
+                position
+            }
+        }
+
+        if (!this.statefulOpcodesEnabled || !this.opcodeStateSeed) {
+            return {
+                opcode,
+                position
+            }
+        }
+
+        return {
+            opcode: decodeStatefulOpcode(opcode, position, this.opcodeStateSeed),
+            position
+        }
+    }
+
+    resolveOpcodeHandler(opcode) {
+        const slot = this.dispatchLookup[opcode]
+        if (slot === undefined) {
+            return null
+        }
+        return this.dispatchHandlers[slot] ?? null
+    }
+
     readBool() {
         const bool = this.readByte() === 1
         return bool
@@ -794,13 +1026,23 @@ class JSVM {
     }
 
     loadFromString(code, format) {
-        code = unpackBytecodeEnvelope(code, format, this.bytecodeIntegrityKey)
+        const envelope = unpackBytecodeEnvelope(code, format, this.bytecodeIntegrityKey)
+        code = envelope.payload
+        this.statefulOpcodesEnabled = envelope.statefulOpcodes
         if (!format) {
 
             this.code = code
             return
         }
         const buffer = decodeBytecodeBuffer(code, format)
+        if (envelope.encrypted) {
+            try {
+                this.code = inflateBytecode(buffer)
+            } catch (error) {
+                throw new Error("VM bytecode decryption failed");
+            }
+            return
+        }
         if (buffer[0] === 0x78 && buffer[1] === 0x9c) {
 
             this.code = inflateBytecode(buffer)
@@ -819,15 +1061,16 @@ class JSVM {
     run() {
         this.executionMode = "sync"
         while (true) {
-            const opcode = this.readByte()
+            const {opcode} = this.readOpcode()
             if (opcode === undefined || opNames[opcode] === "END") {
                 break
             }
-            if (!this.opcodes[opcode]) {
+            const handler = this.resolveOpcodeHandler(opcode)
+            if (!handler) {
                 continue
             }
             try {
-                this.opcodes[opcode]()
+                handler()
             } catch (e) {
 
                 throw e
@@ -838,16 +1081,17 @@ class JSVM {
     async runAsync() {
         this.executionMode = "async"
         while (true) {
-            const opcode = this.readByte()
+            const {opcode} = this.readOpcode()
             if (opcode === undefined || opNames[opcode] === "END") {
                 break
             }
-            if (!this.opcodes[opcode]) {
+            const handler = this.resolveOpcodeHandler(opcode)
+            if (!handler) {
                 continue
             }
 
             try {
-                await this.opcodes[opcode]()
+                await handler()
             } catch (e) {
 
                 throw e

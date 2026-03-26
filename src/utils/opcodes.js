@@ -141,39 +141,45 @@ const implOpcode = {
         }
 
         function runSync(thisArg, args) {
-            vm.regstack.push([vm.registers.slice(), returnDataStore, new Map(vm.registerRefs)]);
-            bindCaptureReferences(vm);
+            const fork = new vm.constructor();
+            fork.setBytecodeIntegrityKey(vm.bytecodeIntegrityKey);
+            fork.code = vm.code;
+            fork.registers = vm.registers.slice();
+            fork.regstack = [];
+            fork.registerRefs = new Map(vm.registerRefs);
+            fork.statefulOpcodesEnabled = vm.statefulOpcodesEnabled;
+            fork.adoptMemoryProtectionState(vm.memoryProtectionState);
+            bindCaptureReferences(fork);
             const restIndex = argOrder.length - 1;
             if (hasDynamicThis) {
-                vm.write(thisRegister, thisArg);
+                fork.write(thisRegister, thisArg);
             }
             if (usesArguments) {
-                vm.write(argumentsRegister, args);
+                fork.write(argumentsRegister, args);
             }
             for (let i = 0; i < argArrayMapper.length; i++) {
                 const sourceIndex = argOrder[i];
                 if (useRest && sourceIndex === restIndex) {
-                    vm.write(argArrayMapper[i], args.slice(sourceIndex));
+                    fork.write(argArrayMapper[i], args.slice(sourceIndex));
                     continue;
                 }
-                vm.write(argArrayMapper[i], args[sourceIndex]);
+                fork.write(argArrayMapper[i], args[sourceIndex]);
             }
-            vm.registers[registers.INSTRUCTION_POINTER] = cur + fnOffset - 1;
-            vm.run()
-            const res = vm.read(returnDataStore);
-            const [oldRegisters, _, oldRegisterRefs] = vm.regstack.pop();
-            vm.registers = oldRegisters;
-            vm.registerRefs = oldRegisterRefs;
+            fork.registers[registers.INSTRUCTION_POINTER] = cur + fnOffset - 1;
+            fork.run()
+            const res = fork.read(returnDataStore);
             log(`Callback result: ${res}`)
             return res
         }
 
         async function runAsync(thisArg, args) {
             const fork = new vm.constructor();
+            fork.setBytecodeIntegrityKey(vm.bytecodeIntegrityKey);
             fork.code = vm.code;
             fork.registers = vm.registers.slice();
             fork.regstack = [];
             fork.registerRefs = new Map(vm.registerRefs);
+            fork.statefulOpcodesEnabled = vm.statefulOpcodesEnabled;
             fork.adoptMemoryProtectionState(vm.memoryProtectionState);
             bindCaptureReferences(fork);
             const restIndex = argOrder.length - 1;

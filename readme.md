@@ -162,6 +162,9 @@ Generated virtualized wrappers also enable protected register storage and dead b
 | Obfuscation | string encryption | ✅ | bytecode string payloads are encrypted before embedding and decoded inside the VM at load time |
 | Obfuscation | dead code injection | ✅ | transpiled bytecode gets unreachable decoy instruction tails by default |
 | Obfuscation | VM memory protection | ✅ | generated wrappers enable protected register storage with on-read restoration |
+| Obfuscation | dispatcher-level indirect dispatch | ✅ | VM instances resolve decoded opcodes through a shuffled dispatch table instead of direct handler lookup |
+| Obfuscation | whole-bytecode encryption with externalized runtime key | ✅ | virtualized wrappers embed only a key id; the actual bytecode decryption keys are registered in the generated VM runtime |
+| Obfuscation | stateful / position-dependent opcodes | ✅ | opcode bytes are encoded by byte position and decoded at runtime using a per-function seed derived from the integrity key |
 
 ## Roadmap
 
@@ -171,9 +174,6 @@ The following VM-oriented techniques used by commercial protectors such as Obfus
 
 | Technique | Priority | Status | Notes |
 | --- | --- | --- | --- |
-| dispatcher-level indirect dispatch | P0 | ❌ | high-impact VM hardening layer; the VM still dispatches through direct opcode handler lookup rather than an extra indirection layer |
-| whole-bytecode encryption with externalized runtime key | P0 | ❌ | closest missing equivalent to keyed VM payload decryption; there is no `vmBytecodeArrayEncodingKey` / runtime key getter style flow for decrypting the entire bytecode blob |
-| stateful or position-dependent opcodes | P0 | ❌ | one of the strongest anti-pattern-matching upgrades; opcode meaning is currently stable for a given build instead of changing by bytecode position or VM state |
 | jump target encoding | P1 | ❌ | valuable for hiding control flow, but less foundational than keyed payload protection or stateful dispatch |
 | decoy opcode handlers | P1 | ❌ | dead bytecode exists, but the dispatcher does not yet include fake never-called opcode handlers |
 | macro opcodes / superinstructions | P1 | ❌ | useful for breaking recognizable opcode traces; common opcode sequences are not yet fused into synthesized macro-operations |
@@ -190,5 +190,5 @@ The following VM-oriented techniques used by commercial protectors such as Obfus
 
 - performance is not guaranteed. js-virtualizer is not intended for high-performance paths or whole-program virtualization; it is better suited to protecting selected functions where slowdown is acceptable
 - the distributed VM is still realistically reversible if shipped as-is. Obfuscating or hardening the VM runtime is still recommended for production use
-- anti-analysis layers are still incomplete. Integrity checks, string encryption, dead code, and protected register storage raise the bar, but the roadmap items above such as indirect dispatch, stateful opcodes, and whole-bytecode keyed decryption are still missing
+- anti-analysis layers are still incomplete. Integrity checks, keyed whole-bytecode encryption, indirect dispatch, stateful opcodes, dead code, and protected register storage raise the bar, but the remaining roadmap items above are still missing
 - syntax outside the support matrix, especially proposal-era or otherwise untested constructs, may still fail even when nearby standardized syntax works

@@ -30,12 +30,23 @@ function extractWrapperValue(pattern, source) {
     return match[1];
 }
 
-function decodeEmbeddedBytecode(transpiledSource) {
+function registerExternalBytecodeKeys(vmSource) {
+    const registrations = [...vmSource.matchAll(/registerBytecodeKey\('([^']+)',\s*'([^']+)'\)/g)];
+
+    registrations.forEach(([, keyId, key]) => {
+        JSVM.registerBytecodeKey(keyId, key);
+    });
+
+    return registrations;
+}
+
+function decodeEmbeddedBytecode(transpiledSource, vmSource) {
     const integrityKey = extractWrapperValue(/setBytecodeIntegrityKey\('([^']+)'\)/, transpiledSource);
     const protectedBytecode = extractWrapperValue(/loadFromString\('([^']+)',\s*'[^']+'\)/, transpiledSource);
     const encoding = extractWrapperValue(/loadFromString\('[^']+',\s*'([^']+)'\)/, transpiledSource);
     const vm = new JSVM();
 
+    registerExternalBytecodeKeys(vmSource);
     vm.setBytecodeIntegrityKey(integrityKey);
     vm.loadFromString(protectedBytecode, encoding);
 
@@ -148,6 +159,31 @@ console.log(demo());
         expect(result.vm).not.toContain(secret);
     });
 
+    test("externalizes whole-bytecode keys to the VM runtime output", async () => {
+        const result = await transpile(`
+// @virtualize
+function demo() {
+  return 42;
+}
+
+console.log(demo());
+`, {
+            fileName: "obfuscation-runtime-key.js",
+            writeOutput: false,
+            passes: ["RemoveUnused"]
+        });
+
+        const registrations = registerExternalBytecodeKeys(result.vm);
+
+        expect(registrations.length).toBeGreaterThan(0);
+        expect(result.vm).toContain("registerBytecodeKey");
+        for (const [, keyId, key] of registrations) {
+            expect(result.transpiled).not.toContain(key);
+            expect(result.transpiled).toContain(keyId);
+        }
+        expect(result.transpiled).toContain("JSCX1:");
+    });
+
     test("protects register storage and restores values on read", () => {
         const vm = new JSVM().enableMemoryProtection("memory-guard");
         const marker = {kind: "probe"};
@@ -191,8 +227,8 @@ console.log(demo());
             deadCodeInjection: false
         });
 
-        const defaultBytecode = decodeEmbeddedBytecode(withDeadCode.transpiled);
-        const plainBytecode = decodeEmbeddedBytecode(withoutDeadCode.transpiled);
+        const defaultBytecode = decodeEmbeddedBytecode(withDeadCode.transpiled, withDeadCode.vm);
+        const plainBytecode = decodeEmbeddedBytecode(withoutDeadCode.transpiled, withoutDeadCode.vm);
 
         expect(defaultBytecode.length).toBeGreaterThan(plainBytecode.length);
         expect(withDeadCode.transpiled).toContain("enableMemoryProtection");
