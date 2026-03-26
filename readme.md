@@ -153,12 +153,7 @@ Generated virtualized wrappers also enable protected register storage and dead b
 > [!WARNING]  
 > It is highly recommended that you modify **and** obfuscate the [vm_dist.js](src/vm_dist.js) file before using it in a production environment. For instance, including the opcode names in the VM makes it more trivial to reverse engineer the workings of the virtualized code
 
-- this project primarily targets server-side javascript runtimes such as node.js, but the distributed VM now runs directly in browser-like environments as long as compressed payloads have access to `globalThis.pako.inflate`
-- async support now covers awaited calls, stored promises, `Promise.all`, async callbacks, nested async virtualized functions, and awaited `try` / `catch` / `finally` paths through regression tests
-- decorator and generator syntax are preprocessed through Babel before Acorn parsing. `legacy` + standard (`2023-11`) decorators and `yield`-based generators are covered by regression tests
-- performance is not guaranteed. js-virtualizer is not intended for use in high-performance applications. it is intended for use in applications where you need to protect your code from reverse engineering. For instance, an express server with a virtualized function using for loops handled about 50% of the requests of the non-virtualized counterpart. You can find the implementation in the samples folder and test it out for yourself
-- given the virtual machine, the virtualized function is pretty trivial to reverse engineer. it is recommended that the virtual machine class is obfuscated before use
-- opcode shuffling/minification exists, bytecode strings are encrypted, argument loading is scrambled, and transpiled payloads carry dead-code tails plus protected register storage, but deeper anti-analysis layers are still incomplete
-- bytecode integrity checks now detect tampering of the protected payload, but they are still not a full anti-patching system if an attacker can freely modify both the wrapper and the VM runtime
-- captured variables now flow through shared closure cells across nested VM callbacks and escaped prototype methods, but this is still a correctness feature rather than a hard security boundary
-- proposal-era or otherwise untested syntax outside the matrix may still fail even when nearby standardized syntax works
+- performance is not guaranteed. js-virtualizer is not intended for high-performance paths or whole-program virtualization; it is better suited to protecting selected functions where slowdown is acceptable
+- the distributed VM is still realistically reversible if shipped as-is. Obfuscating or hardening the VM runtime is still recommended for production use
+- anti-analysis layers are still incomplete. Integrity checks, string encryption, dead code, and protected register storage raise the bar, but they do not stop an attacker who can freely patch both the wrapper and the VM runtime
+- syntax outside the support matrix, especially proposal-era or otherwise untested constructs, may still fail even when nearby standardized syntax works
