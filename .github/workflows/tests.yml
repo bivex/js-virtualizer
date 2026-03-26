@@ -27,7 +27,7 @@ jobs:
         run: bun install --frozen-lockfile
 
       - name: Run unit tests
-        run: bun test
+        run: bun run test
 
       - name: Run transpiler tests
-        run: bun tests/transpiler.js
+        run: bun run test:transpiler

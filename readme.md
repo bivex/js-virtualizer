@@ -10,7 +10,7 @@ js-virtualizer is a proof-of-concept project which brings virtualization-based o
 
 ## Usage
 
-Install dependencies with `bun install`, then run tests with `bun test`.
+Install dependencies with `bun install`, then run tests with `bun run test`.
 
 > [!WARNING]  
 > You need to mark the functions you want to virtualize by putting a comment with the text `// @virtualize` above the function.
