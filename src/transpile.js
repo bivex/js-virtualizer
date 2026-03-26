@@ -70,6 +70,39 @@ function preprocessDecorators(code, decoratorsMode) {
     return transformed.code;
 }
 
+function assertSupportedSyntax(root) {
+    let firstUnsupported = null;
+
+    walk.simple(root, {
+        FunctionDeclaration(node) {
+            if (node.generator && !firstUnsupported) {
+                firstUnsupported = node;
+            }
+        },
+        FunctionExpression(node) {
+            if (node.generator && !firstUnsupported) {
+                firstUnsupported = node;
+            }
+        },
+        YieldExpression(node) {
+            if (!firstUnsupported) {
+                firstUnsupported = node;
+            }
+        }
+    });
+
+    if (!firstUnsupported) {
+        return;
+    }
+
+    const line = firstUnsupported.loc?.start?.line;
+    const column = typeof firstUnsupported.loc?.start?.column === "number"
+        ? firstUnsupported.loc.start.column + 1
+        : null;
+    const location = line ? ` at ${line}:${column ?? 1}` : "";
+    throw new Error(`Generator and async generator functions are not supported yet${location}`);
+}
+
 function createArgumentScramblingPlan(paramNames) {
     if (paramNames.length === 0) {
         return {
@@ -197,6 +230,7 @@ async function transpile(code, options) {
 
     function virtualizeFunction(node) {
         log(new LogData(`Virtualizing Function "${node.id.name}"`, 'info', false));
+        assertSupportedSyntax(node);
         const dependencies = analyzeScope(ast, node);
         const integrityKey = crypto.randomBytes(16).toString("hex");
         const memoryProtectionKey = crypto.randomBytes(16).toString("hex");

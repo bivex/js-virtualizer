@@ -501,9 +501,11 @@ function transformSuperStatement(statement, options) {
     }
 }
 
-function buildFieldInitializationCode(field, targetCode, privateFields) {
+function buildFieldInitializationCode(field, targetCode, privateFields, options) {
     const valueCode = field.value
-        ? escodegen.generate(transformPrivateExpression(desugarExpression(field.value), privateFields))
+        ? escodegen.generate(
+            applyClassExpressionTransforms(field.value, privateFields, options)
+        )
         : "void 0";
 
     if (field.key.type === "PrivateIdentifier") {
@@ -515,20 +517,45 @@ function buildFieldInitializationCode(field, targetCode, privateFields) {
     return `${targetCode}${accessor} = ${valueCode};`;
 }
 
+function applyClassExpressionTransforms(expression, privateFields, options) {
+    return transformPrivateExpression(
+        transformSuperExpression(desugarExpression(expression), options),
+        privateFields
+    );
+}
+
+function applyClassStatementTransforms(statement, privateFields, options) {
+    return transformPrivateStatement(
+        transformSuperStatement(desugarStatement(statement), options),
+        privateFields
+    );
+}
+
+function buildMethodFunctionCode(fnNode, body, options = {}) {
+    const allowAsync = options.allowAsync ?? true;
+    const asyncPrefix = fnNode.async ? "async " : "";
+
+    if (fnNode.generator) {
+        throw new Error("Generator and async generator functions are not supported yet");
+    }
+
+    if (fnNode.async && !allowAsync) {
+        throw new Error("Async accessors are not supported");
+    }
+
+    return `${asyncPrefix}function(${fnNode.params.map((param) => escodegen.generate(param)).join(", ")}) {\n${body}\n}`;
+}
+
 function buildPrivateMethodValueCode(method, privateFields, options) {
-    const params = method.value.params.map((param) => escodegen.generate(param)).join(", ");
     const body = method.value.body.body
         .map((statement) =>
             escodegen.generate(
-                transformSuperStatement(
-                    transformPrivateStatement(desugarStatement(statement), privateFields),
-                    options
-                )
+                applyClassStatementTransforms(statement, privateFields, options)
             )
         )
         .join("\n");
 
-    return `function(${params}) {\n${body}\n}`;
+    return buildMethodFunctionCode(method.value, body);
 }
 
 function buildPrivateAccessorValueCode(info, privateFields, options) {
@@ -550,7 +577,7 @@ function buildPrivateMemberInitializationCode(info, targetCode, privateFields, o
 
     if (info.kind === "field") {
         valueCode = info.value
-            ? escodegen.generate(transformPrivateExpression(desugarExpression(info.value), privateFields))
+            ? escodegen.generate(applyClassExpressionTransforms(info.value, privateFields, options))
             : "undefined";
     } else if (info.kind === "method") {
         valueCode = buildPrivateMethodValueCode(info.method, privateFields, options);
@@ -564,12 +591,7 @@ function buildPrivateMemberInitializationCode(info, targetCode, privateFields, o
 }
 
 function transformClassStatementForCode(statement, privateFields, options) {
-    return escodegen.generate(
-        transformSuperStatement(
-            transformPrivateStatement(desugarStatement(statement), privateFields),
-            options
-        )
-    );
+    return escodegen.generate(applyClassStatementTransforms(statement, privateFields, options));
 }
 
 function buildClassBodyCode(node, className) {
@@ -635,14 +657,11 @@ function buildClassBodyCode(node, className) {
     if (constructorMethod) {
         constructorParams = constructorMethod.value.params.map((param) => escodegen.generate(param)).join(", ");
         constructorStatements = constructorMethod.value.body.body.map((statement) =>
-            transformSuperStatement(
-                transformPrivateStatement(desugarStatement(statement), privateFields),
-                {
-                    superClassCode,
-                    isStatic: false,
-                    inConstructor: true
-                }
-            )
+            applyClassStatementTransforms(statement, privateFields, {
+                superClassCode,
+                isStatic: false,
+                inConstructor: true
+            })
         );
     } else if (superClassCode) {
         constructorParams = "...args";
@@ -654,7 +673,11 @@ function buildClassBodyCode(node, className) {
 
     const fieldStatements = instanceFields
         .filter((field) => field.key.type !== "PrivateIdentifier")
-        .map((field) => parseStatements(buildFieldInitializationCode(field, "this", privateFields))[0]);
+        .map((field) => parseStatements(buildFieldInitializationCode(field, "this", privateFields, {
+            superClassCode,
+            isStatic: false,
+            inConstructor: false
+        }))[0]);
     const privateInstanceStatements = Array.from(privateFields.values())
         .filter((info) => !info.static)
         .map((info) =>
@@ -707,7 +730,6 @@ function buildClassBodyCode(node, className) {
             const target = method.static
                 ? `${className}${getPropertyAccessorCode(method.key, method.computed)}`
                 : `${className}.prototype${getPropertyAccessorCode(method.key, method.computed)}`;
-            const params = method.value.params.map((param) => escodegen.generate(param)).join(", ");
             const body = method.value.body.body
                 .map((statement) => transformClassStatementForCode(statement, privateFields, {
                     superClassCode,
@@ -716,7 +738,7 @@ function buildClassBodyCode(node, className) {
                 }))
                 .join("\n");
 
-            code += `${target} = function(${params}) {\n${body}\n};\n`;
+            code += `${target} = ${buildMethodFunctionCode(method.value, body)};\n`;
             continue;
         }
 
@@ -747,7 +769,6 @@ function buildClassBodyCode(node, className) {
         const descriptorParts = [];
 
         if (group.get) {
-            const params = group.get.value.params.map((param) => escodegen.generate(param)).join(", ");
             const body = group.get.value.body.body
                 .map((statement) => transformClassStatementForCode(statement, privateFields, {
                     superClassCode,
@@ -755,11 +776,10 @@ function buildClassBodyCode(node, className) {
                     inConstructor: false
                 }))
                 .join("\n");
-            descriptorParts.push(`get: function(${params}) {\n${body}\n}`);
+            descriptorParts.push(`get: ${buildMethodFunctionCode(group.get.value, body, {allowAsync: false})}`);
         }
 
         if (group.set) {
-            const params = group.set.value.params.map((param) => escodegen.generate(param)).join(", ");
             const body = group.set.value.body.body
                 .map((statement) => transformClassStatementForCode(statement, privateFields, {
                     superClassCode,
@@ -767,7 +787,7 @@ function buildClassBodyCode(node, className) {
                     inConstructor: false
                 }))
                 .join("\n");
-            descriptorParts.push(`set: function(${params}) {\n${body}\n}`);
+            descriptorParts.push(`set: ${buildMethodFunctionCode(group.set.value, body, {allowAsync: false})}`);
         }
 
         descriptorParts.push("configurable: true");
@@ -787,7 +807,11 @@ function buildClassBodyCode(node, className) {
                 continue;
             }
 
-            code += `${buildFieldInitializationCode(entry, className, privateFields)}\n`;
+            code += `${buildFieldInitializationCode(entry, className, privateFields, {
+                superClassCode,
+                isStatic: true,
+                inConstructor: false
+            })}\n`;
             continue;
         }
 

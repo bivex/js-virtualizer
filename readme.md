@@ -137,9 +137,10 @@ Generated virtualized wrappers also enable protected register storage and dead b
 | Classes | static blocks | ✅ | public and private static member access covered |
 | Classes | private brand checks (`#x in obj`) | ✅ | |
 | Classes | computed class keys | ✅ | fields, methods, accessors, and computed `super[...]` calls |
+| Classes | async methods | ✅ | public, private, static, and inherited cases covered |
 | Classes | decorators | ✅ | supported through Babel preprocessing before Acorn parsing in both `legacy` and standard (`2023-11`) modes |
 | Classes | inheritance | ✅ | |
-| Classes | `super()` and `super.method()` | ✅ | constructor, instance, and static method cases |
+| Classes | `super()` and `super.method()` | ✅ | constructor, instance, static method, and field initializer cases |
 | Obfuscation | bytecode integrity checks | ✅ | protected bytecode envelopes detect payload tampering before decompression/execution |
 | Obfuscation | argument scrambling | ✅ | virtualized wrappers and internal VM callbacks load arguments through randomized aliases/order mappings |
 | Obfuscation | string encryption | ✅ | bytecode string payloads are encrypted before embedding and decoded inside the VM at load time |
@@ -150,7 +151,7 @@ Generated virtualized wrappers also enable protected register storage and dead b
 
 | Area | Feature | Status | Notes |
 | --- | --- | --- | --- |
-| Classes | remaining advanced class syntax | ❌ | now mostly narrowed to parser-level proposals and untested proposal-era edge cases outside the current matrix |
+| Functions | generators / async generators | ❌ | `yield`-based function bodies are not virtualized yet, including generator class methods; transpilation fails fast with a clear error |
 
 ## Limitations
 
@@ -159,6 +160,7 @@ Generated virtualized wrappers also enable protected register storage and dead b
 
 - this project primarily targets server-side javascript runtimes such as node.js, but the distributed VM now runs directly in browser-like environments as long as compressed payloads have access to `globalThis.pako.inflate`
 - async support now covers awaited calls, stored promises, `Promise.all`, async callbacks, nested async virtualized functions, and awaited `try` / `catch` / `finally` paths through regression tests
+- standard class syntax in the support matrix is covered through desugaring, including async methods, but generator-based methods still depend on the broader unsupported `yield` surface
 - performance is not guaranteed. js-virtualizer is not intended for use in high-performance applications. it is intended for use in applications where you need to protect your code from reverse engineering. For instance, an express server with a virtualized function using for loops handled about 50% of the requests of the non-virtualized counterpart. You can find the implementation in the samples folder and test it out for yourself
 - given the virtual machine, the virtualized function is pretty trivial to reverse engineer. it is recommended that the virtual machine class is obfuscated before use
 - decorator syntax is preprocessed through Babel before Acorn parsing. both `legacy` and standard (`2023-11`) decorator transforms are covered

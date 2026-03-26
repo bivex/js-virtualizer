@@ -540,6 +540,93 @@ console.log(demo());
         expect(virtualizedOutput.trim()).toBe("base:child");
     });
 
+    test("supports super inside instance and static field initializers", async () => {
+        const code = `
+// @virtualize
+function demo() {
+  class BaseBox {
+    render() {
+      return "base";
+    }
+
+    static label() {
+      return "BASE";
+    }
+  }
+
+  class FingerprintBox extends BaseBox {
+    value = super.render() + ":field";
+    static kind = super.label() + ":static";
+  }
+
+  const box = new FingerprintBox();
+  return box.value + "|" + FingerprintBox.kind;
+}
+
+console.log(demo());
+`;
+
+        const {originalOutput, virtualizedOutput} = await transpileAndRun(code, "class-super-fields");
+        expect(virtualizedOutput).toBe(originalOutput);
+        expect(virtualizedOutput.trim()).toBe("base:field|BASE:static");
+    });
+
+    test("supports async class methods across public, private, static, and inherited cases", async () => {
+        const code = `
+function later(value) {
+  return Promise.resolve(value);
+}
+
+// @virtualize
+async function demo() {
+  class BaseBox {
+    constructor(seed) {
+      this.seed = seed;
+    }
+
+    async render() {
+      return await later("base:" + this.seed);
+    }
+
+    static async label() {
+      return await later("BASE");
+    }
+  }
+
+  class FingerprintBox extends BaseBox {
+    async #decorate(value) {
+      return await later(value + ":private");
+    }
+
+    static async #finish(value) {
+      return await later(value + ":static");
+    }
+
+    async render() {
+      return await this.#decorate(await super.render());
+    }
+
+    static async label() {
+      return await this.#finish(await super.label());
+    }
+  }
+
+  const values = await Promise.all([
+    new FingerprintBox(8).render(),
+    FingerprintBox.label()
+  ]);
+
+  return values.join("|");
+}
+
+demo().then((result) => console.log(result));
+`;
+
+        const {originalOutput, virtualizedOutput} = await transpileAndRun(code, "class-async-methods");
+        expect(virtualizedOutput).toBe(originalOutput);
+        expect(virtualizedOutput.trim()).toBe("base:8:private|BASE:static");
+    });
+
     test("supports method decorators inside virtualized functions", async () => {
         const code = `
 function decorateMethod(target, key, descriptor) {
@@ -711,5 +798,30 @@ demo().then((result) => console.log(result));
         expect(virtualizedData.value).toBe("AB");
         expect(originalData.elapsed).toBeLessThan(170);
         expect(virtualizedData.elapsed).toBeLessThan(170);
+    });
+
+    test("fails fast on generator class methods with a clear error", async () => {
+        const slug = `generator-class-method-${crypto.randomBytes(4).toString("hex")}`;
+        const code = `
+// @virtualize
+function demo() {
+  class FingerprintBox {
+    *values() {
+      yield 1;
+      yield 2;
+    }
+  }
+
+  return Array.from(new FingerprintBox().values()).join(",");
+}
+
+console.log(demo());
+`;
+
+        await expect(transpile(code, {
+            fileName: `${slug}.js`,
+            writeOutput: false,
+            passes: ["RemoveUnused"]
+        })).rejects.toThrow("Generator and async generator functions are not supported yet");
     });
 });
