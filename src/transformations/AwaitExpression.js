@@ -13,14 +13,20 @@
  * Commercial licensing available upon request.
  */
 
+const {Opcode} = require("../utils/assembler");
+
 function resolveAwaitExpression(expression) {
-    const {outputRegister, borrowed} = this.resolveExpression(expression.argument, {
-        awaited: true
-    })
-    
+    const {outputRegister: sourceRegister} = this.resolveExpression(expression.argument)
+    const outputRegister = this.getAvailableTempLoad()
+
+    this.chunk.append(new Opcode("AWAIT", outputRegister, sourceRegister))
+    if (this.TLMap[sourceRegister] && sourceRegister !== outputRegister) {
+        this.freeTempLoad(sourceRegister)
+    }
+
     return {
         outputRegister,
-        borrowed
+        borrowed: false
     }
 }
 

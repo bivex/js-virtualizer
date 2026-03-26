@@ -16,7 +16,7 @@
 const zlib = require("node:zlib");
 
 const registerNames = ["INSTRUCTION_POINTER", "UNDEFINED", "VOID"]
-const opNames = ["LOAD_BYTE", "LOAD_BOOL", "LOAD_DWORD", "LOAD_FLOAT", "LOAD_STRING", "LOAD_ARRAY", "LOAD_OBJECT", "SETUP_OBJECT", "SETUP_ARRAY", "INIT_CONSTRUCTOR", "FUNC_CALL", "FUNC_ARRAY_CALL", "FUNC_ARRAY_CALL_AWAIT", "VFUNC_CALL", "VFUNC_SETUP_CALLBACK", "VFUNC_RETURN", "JUMP_UNCONDITIONAL", "JUMP_EQ", "JUMP_NOT_EQ", "TRY_CATCH_FINALLY", "THROW", "THROW_ARGUMENT", "SET", "SET_REF", "SET_PROP", "GET_PROP", "SET_INDEX", "GET_INDEX", "WRITE_EXT", "SET_NULL", "SET_UNDEFINED", "EQ_COERCE", "EQ", "NOT_EQ_COERCE", "NOT_EQ", "LESS_THAN", "LESS_THAN_EQ", "GREATER_THAN", "GREATER_THAN_EQ", "TEST", "TEST_NEQ", "ADD", "SUBTRACT", "MULTIPLY", "DIVIDE", "MODULO", "POWER", "AND", "BNOT", "OR", "XOR", "SHIFT_LEFT", "SHIFT_RIGHT", "SPREAD", "SPREAD_INTO", "NOT", "NEGATE", "PLUS", "INCREMENT", "DECREMENT", "TYPEOF", "VOID", "DELETE", "LOGICAL_AND", "LOGICAL_OR", "LOGICAL_NULLISH", "GET_ITERATOR", "ITERATOR_NEXT", "ITERATOR_DONE", "ITERATOR_VALUE", "GET_PROPERTIES", "NOP", "END", "PRINT"]
+const opNames = ["LOAD_BYTE", "LOAD_BOOL", "LOAD_DWORD", "LOAD_FLOAT", "LOAD_STRING", "LOAD_ARRAY", "LOAD_OBJECT", "SETUP_OBJECT", "SETUP_ARRAY", "INIT_CONSTRUCTOR", "FUNC_CALL", "FUNC_ARRAY_CALL", "FUNC_ARRAY_CALL_AWAIT", "AWAIT", "VFUNC_CALL", "VFUNC_SETUP_CALLBACK", "VFUNC_RETURN", "JUMP_UNCONDITIONAL", "JUMP_EQ", "JUMP_NOT_EQ", "TRY_CATCH_FINALLY", "THROW", "THROW_ARGUMENT", "SET", "SET_REF", "SET_PROP", "GET_PROP", "SET_INDEX", "GET_INDEX", "WRITE_EXT", "SET_NULL", "SET_UNDEFINED", "EQ_COERCE", "EQ", "NOT_EQ_COERCE", "NOT_EQ", "LESS_THAN", "LESS_THAN_EQ", "GREATER_THAN", "GREATER_THAN_EQ", "TEST", "TEST_NEQ", "ADD", "SUBTRACT", "MULTIPLY", "DIVIDE", "MODULO", "POWER", "AND", "BNOT", "OR", "XOR", "SHIFT_LEFT", "SHIFT_RIGHT", "SPREAD", "SPREAD_INTO", "NOT", "NEGATE", "PLUS", "INCREMENT", "DECREMENT", "TYPEOF", "VOID", "DELETE", "LOGICAL_AND", "LOGICAL_OR", "LOGICAL_NULLISH", "GET_ITERATOR", "ITERATOR_NEXT", "ITERATOR_DONE", "ITERATOR_VALUE", "GET_PROPERTIES", "NOP", "END", "PRINT"]
 
 const reservedNames = new Set(registerNames)
 reservedNames.delete("VOID")
@@ -82,6 +82,9 @@ const implOpcode = {
         const args = this.read(argsReg);
         const res = await this.read(fn).apply(this.read(funcThis), args);
         this.write(dst, res);
+    }, AWAIT: async function () {
+        const dest = this.readByte(), src = this.readByte();
+        this.write(dest, await this.read(src));
     }, VFUNC_CALL: function () {
         const cur = this.read(registers.INSTRUCTION_POINTER);
         const offset = this.readDWORD(), returnDataStore = this.readByte(), argMap = this.readArrayRegisters();
@@ -93,16 +96,16 @@ const implOpcode = {
     }, VFUNC_SETUP_CALLBACK: function () {
         const cur = this.read(registers.INSTRUCTION_POINTER);
         const fnOffset = this.readDWORD(), dest = this.readByte(), returnDataStore = this.readByte(),
-            hasDynamicThis = this.readBool(), thisRegister = this.readByte(), useRest = this.readBool(), argArrayMapper = this.readArrayRegisters();
+            isAsync = this.readBool(), hasDynamicThis = this.readBool(), thisRegister = this.readByte(), useRest = this.readBool(), argArrayMapper = this.readArrayRegisters();
 
 
         const mutableRegisters = this.readArrayRegisters();
         const vm = this;
 
-        function cb(...args) {
+        function runSync(thisArg, args) {
             vm.regstack.push([vm.registers.slice(), returnDataStore]);
             if (hasDynamicThis) {
-                vm.write(thisRegister, this);
+                vm.write(thisRegister, thisArg);
             }
             for (let i = 0; i < argArrayMapper.length; i++) {
                 if (useRest && i === argArrayMapper.length - 1) {
@@ -123,6 +126,38 @@ const implOpcode = {
 
             return res
         }
+
+        async function runAsync(thisArg, args) {
+            const fork = new vm.constructor();
+            fork.code = vm.code;
+            fork.registers = vm.registers.slice();
+            fork.regstack = [];
+            if (hasDynamicThis) {
+                fork.write(thisRegister, thisArg);
+            }
+            for (let i = 0; i < argArrayMapper.length; i++) {
+                if (useRest && i === argArrayMapper.length - 1) {
+                    fork.write(argArrayMapper[i], args.slice(i));
+                    break;
+                }
+                fork.write(argArrayMapper[i], args[i]);
+            }
+            fork.registers[registers.INSTRUCTION_POINTER] = cur + fnOffset - 1;
+            await fork.runAsync()
+            const res = fork.read(returnDataStore);
+            for (const mutableRegister of mutableRegisters) {
+                vm.registers[mutableRegister] = fork.registers[mutableRegister];
+            }
+            return res
+        }
+
+        const cb = isAsync
+            ? async function (...args) {
+                return runAsync(this, args);
+            }
+            : function (...args) {
+                return runSync(this, args);
+            };
 
         this.write(dest, cb);
     }, VFUNC_RETURN: function () {

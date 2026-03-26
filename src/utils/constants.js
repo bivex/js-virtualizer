@@ -64,6 +64,8 @@ const opNames = [
     "FUNC_ARRAY_CALL",
     // [fn, dst, functhis (identity), argsReg] : argsReg is a register that contains an array of arguments
     "FUNC_ARRAY_CALL_AWAIT",
+    // [dest, src]
+    "AWAIT",
     // - internal functions (defined in bytecode) -
     // argmap should be a list of functionreg: argreg
     // [offset, return_data_store_external, ...argmap]

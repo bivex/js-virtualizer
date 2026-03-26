@@ -89,6 +89,10 @@ const implOpcode = {
         log(`Function call result: ${res} => ${dst}`);
         this.write(dst, res);
     },
+    AWAIT: async function () {
+        const dest = this.readByte(), src = this.readByte();
+        this.write(dest, await this.read(src));
+    },
     VFUNC_CALL: function () {
         const cur = this.read(registers.INSTRUCTION_POINTER);
         const offset = this.readDWORD(),
@@ -108,6 +112,7 @@ const implOpcode = {
         const fnOffset = this.readDWORD(),
             dest = this.readByte(),
             returnDataStore = this.readByte(),
+            isAsync = this.readBool(),
             hasDynamicThis = this.readBool(),
             thisRegister = this.readByte(),
             useRest = this.readBool(),
@@ -123,10 +128,10 @@ const implOpcode = {
         const mutableRegisters = this.readArrayRegisters();
         const vm = this;
 
-        function cb(...args) {
+        function runSync(thisArg, args) {
             vm.regstack.push([vm.registers.slice(), returnDataStore]);
             if (hasDynamicThis) {
-                vm.write(thisRegister, this);
+                vm.write(thisRegister, thisArg);
             }
             for (let i = 0; i < argArrayMapper.length; i++) {
                 if (useRest && i === argArrayMapper.length - 1) {
@@ -147,6 +152,39 @@ const implOpcode = {
             log(`Callback result: ${res}`)
             return res
         }
+
+        async function runAsync(thisArg, args) {
+            const fork = new vm.constructor();
+            fork.code = vm.code;
+            fork.registers = vm.registers.slice();
+            fork.regstack = [];
+            if (hasDynamicThis) {
+                fork.write(thisRegister, thisArg);
+            }
+            for (let i = 0; i < argArrayMapper.length; i++) {
+                if (useRest && i === argArrayMapper.length - 1) {
+                    fork.write(argArrayMapper[i], args.slice(i));
+                    break;
+                }
+                fork.write(argArrayMapper[i], args[i]);
+            }
+            fork.registers[registers.INSTRUCTION_POINTER] = cur + fnOffset - 1;
+            await fork.runAsync()
+            const res = fork.read(returnDataStore);
+            for (const mutableRegister of mutableRegisters) {
+                vm.registers[mutableRegister] = fork.registers[mutableRegister];
+            }
+            log(`Async callback result: ${res}`)
+            return res
+        }
+
+        const cb = isAsync
+            ? async function (...args) {
+                return runAsync(this, args);
+            }
+            : function (...args) {
+                return runSync(this, args);
+            };
 
         this.write(dest, cb);
     },

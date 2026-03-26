@@ -6,7 +6,7 @@ virtualization-based obfuscation for javascript
 
 ![Unit Tests](https://github.com/aesthetic0001/js-virtualizer/actions/workflows/tests.yml/badge.svg) ![npm downloads](https://img.shields.io/npm/dm/js-virtualizer) ![npm version](https://img.shields.io/npm/v/js-virtualizer) ![License](https://img.shields.io/npm/l/js-virtualizer) 
 
-js-virtualizer is a proof-of-concept project which brings virtualization-based obfuscation to javascript. In this implementation, bytecode is fed to a virtual machine implemented in javascript which runs on its own instruction set. A transpiler is included to convert select **functions** to opcodes for the VM. It is important to note that js-virtualizer is **not intended for use on entire programs, but rather for specified functions**! There will be a significant performance hit if you try to run an entire program through the VM (it is also not practical to do so as truely concurrent async is not supported by the current implementation, so everything in the program would have to run synchronously)
+js-virtualizer is a proof-of-concept project which brings virtualization-based obfuscation to javascript. In this implementation, bytecode is fed to a virtual machine implemented in javascript which runs on its own instruction set. A transpiler is included to convert select **functions** to opcodes for the VM. It is important to note that js-virtualizer is **not intended for use on entire programs, but rather for specified functions**! There will be a significant performance hit if you try to run an entire program through the VM.
 
 ## Usage
 
@@ -94,7 +94,8 @@ main();
   - [x] function declarations
   - [x] function calls (both external and internal) with proper `this` context
   - [x] callbacks
-  - [x] awaiting functions (running async functions concurrently is not supported)
+  - [x] awaiting functions
+  - [x] concurrent async flows across the virtualized function, including stored promises and `Promise.all`
   - [x] a function accessing its own `this` property
 - [x] other statements
   - [x] return statements
@@ -130,7 +131,7 @@ main();
 > It is highly recommended that you modify **and** obfuscate the [vm_dist.js](src/vm_dist.js) file before using it in a production environment. For instance, including the opcode names in the VM makes it more trivial to reverse engineer the workings of the virtualized code
 
 - this project primarily targets server-side javascript runtimes such as node.js. a browser demo is included, but browser usage still relies on a compatibility wrapper around `vm_dist.js`
-- if you try to virtualize a program with async functions running concurrently, it will not work as the transpiler & virtual machine were not designed with concurrency in mind (it is a proof-of-concept, after all). the JSVM currently does not support async functions in the context of the whole program. however, you can use async functions within virtualized function as they have their own context
+- async support now covers awaited calls, stored promises, `Promise.all`, and nested async virtualized functions. it is still less battle-tested than the synchronous path and may expose edge cases in more exotic async/control-flow combinations
 - performance is not guaranteed. js-virtualizer is not intended for use in high-performance applications. it is intended for use in applications where you need to protect your code from reverse engineering. For instance, an express server with a virtualized function using for loops handled about 50% of the requests of the non-virtualized counterpart. You can find the implementation in the samples folder and test it out for yourself
 - given the virtual machine, the virtualized function is pretty trivial to reverse engineer. it is recommended that the virtual machine class is obfuscated before use
 - class support currently covers class declarations, class expressions, getters/setters, class fields, static fields, inheritance, and `super`. private fields and decorator-style features are still outside the supported set
@@ -153,9 +154,7 @@ main();
   - currently, any captured variables do not get dropped by the transpiler and persist in memory, even when going out of scope
   - need to add a way to check for references to both variables which store protos as well as the variables which are captured by protos
   - once no more references to the proto exist, all variables captured by the proto should be dropped (assuming they have no other references; there should be a counter for the number of references to captured variables)
-- [ ] add support for async functions in the context of the whole function
-  - currently, you are only able to properly await functions, but not run them concurrently as you would in a normal program
-  - ~~async would require complex register management. the registers need to be restored after calling the async function, but some registers may have been mutated by the program before the resolution.~~ this can be mitigated as we can just never drop any variables and keep them for the entire lifetime of the function. however, this would still require async context switching
+- [x] add support for async functions in the context of the whole function
 - [ ] extend class support to private fields, decorators, and remaining advanced class syntax
 - [ ] obfuscation passes/optimization passes
 - [ ] obfuscation techniques

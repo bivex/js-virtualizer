@@ -33,7 +33,6 @@ function resolveExpression(expression, options) {
     options.computed = options.computed ?? true
     options.forceObjectImmutability = options.forceObjectImmutability ?? false
     options.forceImmutableMerges = options.forceImmutableMerges ?? true
-    options.awaited = options.awaited ?? false
 
     const metadata = {}
     const {computed} = options
@@ -79,7 +78,7 @@ function resolveExpression(expression, options) {
             break;
         }
         case 'CallExpression': {
-            outputRegister = this.resolveCallExpression(expression, options.awaited);
+            outputRegister = this.resolveCallExpression(expression, false);
             log(`CallExpression result is at ${this.TLMap[outputRegister]}`)
             break
         }

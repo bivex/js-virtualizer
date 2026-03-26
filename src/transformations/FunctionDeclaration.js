@@ -23,6 +23,7 @@ function resolveFunctionDeclaration(node, options) {
     options.declareName = options.declareName ?? `anonymous_${this.generateOpcodeLabel()}`
     options.declareRegister = options.declareRegister ?? this.randomRegister()
     const hasDynamicThis = node.type !== 'ArrowFunctionExpression'
+    const isAsync = !!node.async
 
     if (options.declareName) {
         log(new LogData(`Declaring function ${options.declareName} at register ${options.declareRegister}`, 'accent', true))
@@ -127,7 +128,7 @@ function resolveFunctionDeclaration(node, options) {
     this.exitVFuncContext()
     jumpOver.modifyArgs(encodeDWORD(this.chunk.getCurrentIP() - jumpOverIP))
     this.chunk.append(new Opcode('VFUNC_SETUP_CALLBACK', encodeDWORD(startIP - this.chunk.getCurrentIP()),
-        options.declareRegister, outputRegister, hasDynamicThis ? 1 : 0, hasDynamicThis ? thisRegister : 0, lastIsRest ? 1 : 0, encodeArrayRegisters(argMap), encodeArrayRegisters(dependencies)))
+        options.declareRegister, outputRegister, isAsync ? 1 : 0, hasDynamicThis ? 1 : 0, hasDynamicThis ? thisRegister : 0, lastIsRest ? 1 : 0, encodeArrayRegisters(argMap), encodeArrayRegisters(dependencies)))
     this.freeTempLoad(outputRegister)
 
     return {

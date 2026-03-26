@@ -247,5 +247,54 @@ console.log(demo());
         expect(virtualizedOutput.trim()).toBe("base:10:child:CHILD:CHILD");
     });
 
-    test.todo("supports async concurrency across the whole virtualized program");
+    test("supports async concurrency across the whole virtualized program", async () => {
+        const slug = `async-concurrency-${crypto.randomBytes(4).toString("hex")}`;
+        const code = `
+async function delay(value, ms) {
+  return new Promise((resolve) => setTimeout(() => resolve(value), ms));
+}
+
+// @virtualize
+async function demo() {
+  const started = Date.now();
+
+  async function helper(value, ms) {
+    const pending = delay(value, ms);
+    return await pending;
+  }
+
+  const first = delay("A", 80);
+  const second = helper("B", 80);
+  const combined = await Promise.all([first, second]);
+
+  return JSON.stringify({
+    value: combined.join(""),
+    elapsed: Date.now() - started
+  });
+}
+
+demo().then((result) => console.log(result));
+`;
+
+        const inputPath = path.join(__dirname, `../output/${slug}.source.js`);
+        const vmOutputPath = path.join(__dirname, `../output/${slug}.vm.js`);
+        const transpiledOutputPath = path.join(__dirname, `../output/${slug}.virtualized.js`);
+
+        fs.writeFileSync(inputPath, code);
+
+        const result = await transpile(code, {
+            fileName: `${slug}.js`,
+            vmOutputPath,
+            transpiledOutputPath,
+            passes: ["RemoveUnused"]
+        });
+
+        const originalData = JSON.parse(childProcess.execSync(`node ${inputPath}`).toString());
+        const virtualizedData = JSON.parse(childProcess.execSync(`node ${result.transpiledOutputPath}`).toString());
+
+        expect(virtualizedData.value).toBe(originalData.value);
+        expect(virtualizedData.value).toBe("AB");
+        expect(originalData.elapsed).toBeLessThan(170);
+        expect(virtualizedData.elapsed).toBeLessThan(170);
+    });
 });
