@@ -1,3 +1,18 @@
+/**
+ * Copyright (c) 2026 Bivex
+ *
+ * Author: Bivex
+ * Available for contact via email: support@b-b.top
+ * For up-to-date contact information:
+ * https://github.com/bivex
+ *
+ * Created: 2026-03-26 18:54
+ * Last Updated: 2026-03-26 18:54
+ *
+ * Licensed under the MIT License.
+ * Commercial licensing available upon request.
+ */
+
 const acorn = require("acorn");
 const walk = require("acorn-walk");
 const eslintScope = require("eslint-scope");
@@ -13,6 +28,7 @@ const zlib = require("node:zlib");
 const fs = require("node:fs");
 const obfuscateCode = require("./postTranspilation/obfuscateCode");
 const obfuscateOpcodes = require("./postTranspilation/obfuscateOpcodes");
+const {desugarStatementList} = require("./utils/desugar");
 
 const vmDist = fs.readFileSync(path.join(__dirname, './vm_dist.js'), 'utf-8');
 const encodings = ['base64']
@@ -84,7 +100,16 @@ async function transpile(code, options) {
     function virtualizeFunction(node) {
         log(new LogData(`Virtualizing Function "${node.id.name}"`, 'info', false));
         const dependencies = analyzeScope(ast, node);
-        const functionBody = node.body.body;
+        const usesThis = (() => {
+            let found = false
+            walk.simple(node.body, {
+                ThisExpression() {
+                    found = true
+                }
+            })
+            return found
+        })()
+        const functionBody = desugarStatementList(node.body.body);
         const regToDep = {}
 
         const generator = new FunctionBytecodeGenerator(functionBody);
@@ -93,6 +118,12 @@ async function transpile(code, options) {
             const register = generator.randomRegister()
             regToDep[register] = dependency
             generator.declareVariable(dependency, register)
+        }
+
+        if (usesThis) {
+            const register = generator.randomRegister()
+            regToDep[register] = "this"
+            generator.declareVariable("this", register)
         }
 
         const params = []

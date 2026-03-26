@@ -1,3 +1,18 @@
+/**
+ * Copyright (c) 2026 Bivex
+ *
+ * Author: Bivex
+ * Available for contact via email: support@b-b.top
+ * For up-to-date contact information:
+ * https://github.com/bivex
+ *
+ * Created: 2026-03-26 18:54
+ * Last Updated: 2026-03-26 18:54
+ *
+ * Licensed under the MIT License.
+ * Commercial licensing available upon request.
+ */
+
 const {BytecodeValue} = require("../utils/assembler");
 const {log, LogData} = require("../utils/log");
 const {registers} = require("../utils/constants");
@@ -35,6 +50,12 @@ function resolveExpression(expression, options) {
                 this.chunk.append(literalValue.getLoadOpcode());
                 log(new LogData(`Treating non-computed identifier as literal! Loading "${expression.name}" at register ${outputRegister}`, 'warn', true))
             }
+            break
+        }
+        case 'ThisExpression': {
+            outputRegister = this.getVariable("this");
+            borrowed = true
+            log(`Loaded this at register ${outputRegister}`)
             break
         }
         case 'Literal': {
@@ -98,6 +119,7 @@ function resolveExpression(expression, options) {
             break
         }
         case 'FunctionDeclaration':
+        case 'FunctionExpression':
         case 'ArrowFunctionExpression': {
             outputRegister = this.resolveFunctionDeclaration(expression).outputRegister
             log(`ArrowFunctionExpression result is at ${this.TLMap[outputRegister]}`)

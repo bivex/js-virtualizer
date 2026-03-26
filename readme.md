@@ -12,6 +12,11 @@ js-virtualizer is a proof-of-concept project which brings virtualization-based o
 
 Install dependencies with `bun install`, then run tests with `bun run test`.
 
+Useful demo scripts:
+
+- `bun run demo:fingerprint` - generates a Node.js fingerprint demo and prints previews of the obfuscated VM and virtualized output
+- `bun run demo:fingerprint:browser` - generates a browser demo at `output/browser-fingerprint/index.html`
+
 > [!WARNING]  
 > You need to mark the functions you want to virtualize by putting a comment with the text `// @virtualize` above the function.
 
@@ -76,6 +81,7 @@ main();
 
 - [x] variables
   - [x] proper scoping for let and const
+  - [x] function-scoped `var`
   - [x] all primitive types
   - [x] object expressions
   - [x] array expressions
@@ -89,7 +95,7 @@ main();
   - [x] function calls (both external and internal) with proper `this` context
   - [x] callbacks
   - [x] awaiting functions (running async functions concurrently is not supported)
-  - [ ] a function accessing its own "this" property
+  - [x] a function accessing its own `this` property
 - [x] other statements
   - [x] return statements
   - [x] if/else/else if statements
@@ -108,6 +114,7 @@ main();
   - [x] ternary operators
   - [x] logical operators
   - [x] new expressions
+  - [x] class declarations without inheritance/private fields
   - [x] unary operators (typeof, delete, etc.)
   - [x] binary operators
   - [x] update operators
@@ -119,16 +126,17 @@ main();
 > [!WARNING]  
 > It is highly recommended that you modify **and** obfuscate the [vm_dist.js](src/vm_dist.js) file before using it in a production environment. For instance, including the opcode names in the VM makes it more trivial to reverse engineer the workings of the virtualized code
 
-- this project is targeting server-side javascript runtimes such as node.js, and has not been tested in the browser. however, it should be trivial to get it working in the browser by removing the `require` statements and replacing them with the appropriate browser equivalents in `vm_dist.js`
+- this project primarily targets server-side javascript runtimes such as node.js. a browser demo is included, but browser usage still relies on a compatibility wrapper around `vm_dist.js`
 - if you try to virtualize a program with async functions running concurrently, it will not work as the transpiler & virtual machine were not designed with concurrency in mind (it is a proof-of-concept, after all). the JSVM currently does not support async functions in the context of the whole program. however, you can use async functions within virtualized function as they have their own context
 - performance is not guaranteed. js-virtualizer is not intended for use in high-performance applications. it is intended for use in applications where you need to protect your code from reverse engineering. For instance, an express server with a virtualized function using for loops handled about 50% of the requests of the non-virtualized counterpart. You can find the implementation in the samples folder and test it out for yourself
 - given the virtual machine, the virtualized function is pretty trivial to reverse engineer. it is recommended that the virtual machine class is obfuscated before use
-- declaring variables by `var` is not supported. it is not guaranteed that the variable will behave as expected. you should use `let` or `const` instead
+- class support currently covers plain class declarations. inheritance, private fields, getters/setters, and class expressions are still outside the supported set
 
 ## Todo
 
 - [x] transpiler
 - [x] provide a proper `this` property to functions
+- [x] proper `var` support
 - [x] template literals
 - [x] proper for and while loops
 - [x] sequence expressions
@@ -136,8 +144,8 @@ main();
 - [x] arrow functions
 - [x] object expressions
 - [x] callbacks
+- [x] basic class declaration support
 - [x] try/catch/finally
-- [ ] proper var support
 - [ ] proper reference counting to manage variables captured by protos (functions declared within functions) and other data types which are passed by reference (objects, arrays, etc.)
   - currently, any captured variables do not get dropped by the transpiler and persist in memory, even when going out of scope
   - need to add a way to check for references to both variables which store protos as well as the variables which are captured by protos
@@ -145,7 +153,7 @@ main();
 - [ ] add support for async functions in the context of the whole function
   - currently, you are only able to properly await functions, but not run them concurrently as you would in a normal program
   - ~~async would require complex register management. the registers need to be restored after calling the async function, but some registers may have been mutated by the program before the resolution.~~ this can be mitigated as we can just never drop any variables and keep them for the entire lifetime of the function. however, this would still require async context switching
-- [ ] allow for declaration of classes (i don't know why you would want to init a class in a function but this is still a limitation of the current implementation)
+- [ ] extend class support to inheritance, getters/setters, private fields, and class expressions
 - [ ] obfuscation passes/optimization passes
 - [ ] obfuscation techniques
   - [x] opcode shuffling and minification (remove unused opcodes, rename opcodes, etc.)

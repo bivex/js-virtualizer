@@ -1,3 +1,18 @@
+/**
+ * Copyright (c) 2026 Bivex
+ *
+ * Author: Bivex
+ * Available for contact via email: support@b-b.top
+ * For up-to-date contact information:
+ * https://github.com/bivex
+ *
+ * Created: 2026-03-26 18:54
+ * Last Updated: 2026-03-26 18:54
+ *
+ * Licensed under the MIT License.
+ * Commercial licensing available upon request.
+ */
+
 const {VMChunk, Opcode, encodeDWORD, BytecodeValue} = require("./assembler");
 const crypto = require("crypto");
 const {registerNames, binaryOperatorToOpcode, needsCleanup} = require("./constants");
@@ -56,6 +71,7 @@ class FunctionBytecodeGenerator {
         // variables declared by the scope, array of array of variable names
         // 0th element is the global scope, subsequent elements are nested scopes
         this.activeScopes = [[]]
+        this.functionScopeIndices = [0]
         // variables that are currently in the active scope, map of variable name to array of registers,
         // where the last element is the most recent register (active reference)
         this.activeVariables = {}
@@ -119,12 +135,14 @@ class FunctionBytecodeGenerator {
         this.removeRegister(register)
     }
 
-    declareVariable(variableName, register) {
+    declareVariable(variableName, register, options) {
+        options = options ?? {}
+        const scopeIndex = options.scopeIndex ?? (options.functionScoped ? this.functionScopeIndices[this.functionScopeIndices.length - 1] : this.activeScopes.length - 1)
         log(new LogData(`Declaring variable ${variableName} at register ${register ?? 'random'}`, 'accent'))
         if (!this.activeVariables[variableName]) {
             this.activeVariables[variableName] = []
         }
-        this.activeScopes[this.activeScopes.length - 1].push(variableName)
+        this.activeScopes[scopeIndex].push(variableName)
         this.activeVariables[variableName].push({
             register: register ?? this.randomRegister(),
             metadata: {
@@ -353,10 +371,12 @@ class FunctionBytecodeGenerator {
                         this.chunk.append(new Opcode('LOAD_DWORD', counterRegister, encodeDWORD(0)));
                         this.chunk.append(new Opcode('LOAD_DWORD', oneRegister, encodeDWORD(1)));
 
+                        const functionScoped = node.kind === 'var'
+
                         for (let i = 0; i < declaration.id.elements.length; i++) {
                             const element = declaration.id.elements[i]
                             assert(element.type === 'Identifier', 'ArrayPattern element is not an Identifier!')
-                            this.declareVariable(element.name, this.randomRegister())
+                            this.declareVariable(element.name, this.randomRegister(), {functionScoped})
                             this.chunk.append(new Opcode('GET_INDEX', this.getVariable(element.name), arrayRegister, counterRegister))
                             this.chunk.append(new Opcode('ADD', counterRegister, counterRegister, oneRegister))
                         }
@@ -367,11 +387,12 @@ class FunctionBytecodeGenerator {
                     }
                     if (declaration.id.type === 'ObjectPattern') {
                         const objectRegister = this.resolveExpression(declaration.init).outputRegister
+                        const functionScoped = node.kind === 'var'
                         for (const property of declaration.id.properties) {
                             const {key, value} = property
                             assert(key.type === 'Identifier', 'ObjectPattern key is not an Identifier!')
                             assert(value.type === 'Identifier', 'ObjectPattern value is not an Identifier!')
-                            this.declareVariable(value.name, this.randomRegister())
+                            this.declareVariable(value.name, this.randomRegister(), {functionScoped})
                             const propRegister = this.randomRegister()
                             const prop = new BytecodeValue(key.name, propRegister)
                             this.chunk.append(prop.getLoadOpcode())
@@ -388,7 +409,8 @@ class FunctionBytecodeGenerator {
                             case 'ArrowFunctionExpression':
                             case 'FunctionDeclaration': {
                                 const {dependencies} = this.resolveFunctionDeclaration(declaration.init, {
-                                    declareName: declaration.id.name
+                                    declareName: declaration.id.name,
+                                    functionScoped: node.kind === 'var'
                                 })
                                 return;
                             }
@@ -397,7 +419,9 @@ class FunctionBytecodeGenerator {
                                 if (needsCleanup(declaration.init)) this.freeTempLoad(out)
                             }
                         }
-                        this.declareVariable(declaration.id.name, this.randomRegister());
+                        this.declareVariable(declaration.id.name, this.randomRegister(), {
+                            functionScoped: node.kind === 'var'
+                        });
                         this.chunk.append(new Opcode('SET_REF', this.getVariable(declaration.id.name), out));
                         if (needsCleanup(declaration.init)) this.freeTempLoad(out)
                     }
@@ -463,16 +487,24 @@ class FunctionBytecodeGenerator {
     generate(block, options) {
         block = block ?? this.ast
         options = options ?? {}
+        options.functionScope = options.functionScope ?? (this.activeScopes.length === 1)
 
         this.activeScopes.push([])
+        if (options.functionScope) {
+            this.functionScopeIndices.push(this.activeScopes.length - 1)
+        }
         // perform a DFS on the block
         for (const node of block) {
             this.handleNode(node, options)
         }
         // discard all variables in the current scope
-        for (const variableName of this.activeScopes.pop()) {
+        const scope = this.activeScopes.pop()
+        for (const variableName of scope) {
             log(new LogData(`Dropping variable ${variableName}`, 'accent'))
             this.dropVariable(variableName)
+        }
+        if (options.functionScope) {
+            this.functionScopeIndices.pop()
         }
     }
 
