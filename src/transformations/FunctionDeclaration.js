@@ -22,6 +22,7 @@ function resolveFunctionDeclaration(node, options) {
     options = options || {}
     options.declareName = options.declareName ?? `anonymous_${this.generateOpcodeLabel()}`
     options.declareRegister = options.declareRegister ?? this.randomRegister()
+    const hasDynamicThis = node.type !== 'ArrowFunctionExpression'
 
     if (options.declareName) {
         log(new LogData(`Declaring function ${options.declareName} at register ${options.declareRegister}`, 'accent', true))
@@ -41,8 +42,15 @@ function resolveFunctionDeclaration(node, options) {
     this.chunk.append(jumpOver)
     const hasDefault = []
     const argRegisters = new Set()
+    let thisRegister = null
 
     const lastIsRest = params.length && params[params.length - 1].type === 'RestElement'
+
+    if (hasDynamicThis) {
+        this.declareVariable('this')
+        thisRegister = this.getVariable('this')
+        argRegisters.add(thisRegister)
+    }
 
     for (const param of params) {
         switch (param.type) {
@@ -119,7 +127,7 @@ function resolveFunctionDeclaration(node, options) {
     this.exitVFuncContext()
     jumpOver.modifyArgs(encodeDWORD(this.chunk.getCurrentIP() - jumpOverIP))
     this.chunk.append(new Opcode('VFUNC_SETUP_CALLBACK', encodeDWORD(startIP - this.chunk.getCurrentIP()),
-        options.declareRegister, outputRegister, lastIsRest ? 1 : 0, encodeArrayRegisters(argMap), encodeArrayRegisters(dependencies)))
+        options.declareRegister, outputRegister, hasDynamicThis ? 1 : 0, hasDynamicThis ? thisRegister : 0, lastIsRest ? 1 : 0, encodeArrayRegisters(argMap), encodeArrayRegisters(dependencies)))
     this.freeTempLoad(outputRegister)
 
     return {
