@@ -42,25 +42,230 @@ function getPropertyAccessorCode(key, computed) {
     return `[${JSON.stringify(key.value)}]`;
 }
 
-function buildClassBodyCode(node, className) {
-    if (node.superClass) {
-        throw new Error("Class inheritance is not supported in virtualized functions");
+function transformSuperExpression(expression, options) {
+    if (!expression) return expression;
+    options = options ?? {};
+
+    const superTargetBase = options.isStatic
+        ? options.superClassCode
+        : `${options.superClassCode}.prototype`;
+
+    switch (expression.type) {
+        case "CallExpression": {
+            if (expression.callee.type === "Super") {
+                if (!options.inConstructor) {
+                    throw new Error("Direct super() calls are only supported in constructors");
+                }
+                const args = expression.arguments.map((argument) => escodegen.generate(transformSuperExpression(argument, options))).join(", ");
+                return parseExpression(`${options.superClassCode}.call(this${args ? `, ${args}` : ""})`);
+            }
+
+            if (expression.callee.type === "MemberExpression" && expression.callee.object.type === "Super") {
+                const propertyAccessor = getPropertyAccessorCode(expression.callee.property, expression.callee.computed);
+                const args = expression.arguments.map((argument) => escodegen.generate(transformSuperExpression(argument, options))).join(", ");
+                return parseExpression(`${superTargetBase}${propertyAccessor}.call(this${args ? `, ${args}` : ""})`);
+            }
+
+            expression.callee = transformSuperExpression(expression.callee, options);
+            expression.arguments = expression.arguments.map((argument) => transformSuperExpression(argument, options));
+            return expression;
+        }
+        case "MemberExpression": {
+            if (expression.object.type === "Super") {
+                const propertyAccessor = getPropertyAccessorCode(expression.property, expression.computed);
+                return parseExpression(`${superTargetBase}${propertyAccessor}`);
+            }
+            expression.object = transformSuperExpression(expression.object, options);
+            expression.property = transformSuperExpression(expression.property, options);
+            return expression;
+        }
+        case "AssignmentExpression":
+            expression.left = transformSuperExpression(expression.left, options);
+            expression.right = transformSuperExpression(expression.right, options);
+            return expression;
+        case "BinaryExpression":
+        case "LogicalExpression":
+            expression.left = transformSuperExpression(expression.left, options);
+            expression.right = transformSuperExpression(expression.right, options);
+            return expression;
+        case "UnaryExpression":
+        case "UpdateExpression":
+            expression.argument = transformSuperExpression(expression.argument, options);
+            return expression;
+        case "ConditionalExpression":
+            expression.test = transformSuperExpression(expression.test, options);
+            expression.consequent = transformSuperExpression(expression.consequent, options);
+            expression.alternate = transformSuperExpression(expression.alternate, options);
+            return expression;
+        case "ArrayExpression":
+            expression.elements = expression.elements.map((element) => transformSuperExpression(element, options));
+            return expression;
+        case "ObjectExpression":
+            expression.properties.forEach((property) => {
+                if (property.type === "Property") {
+                    if (property.computed) {
+                        property.key = transformSuperExpression(property.key, options);
+                    }
+                    property.value = transformSuperExpression(property.value, options);
+                }
+            });
+            return expression;
+        case "SequenceExpression":
+            expression.expressions = expression.expressions.map((child) => transformSuperExpression(child, options));
+            return expression;
+        case "TemplateLiteral":
+            expression.expressions = expression.expressions.map((child) => transformSuperExpression(child, options));
+            return expression;
+        case "AwaitExpression":
+        case "SpreadElement":
+            expression.argument = transformSuperExpression(expression.argument, options);
+            return expression;
+        case "FunctionExpression":
+        case "ArrowFunctionExpression":
+            return expression;
+        default:
+            return expression;
     }
+}
+
+function transformSuperStatement(statement, options) {
+    if (!statement) return statement;
+
+    switch (statement.type) {
+        case "ExpressionStatement":
+            statement.expression = transformSuperExpression(statement.expression, options);
+            return statement;
+        case "ReturnStatement":
+        case "ThrowStatement":
+            statement.argument = transformSuperExpression(statement.argument, options);
+            return statement;
+        case "VariableDeclaration":
+            statement.declarations.forEach((declaration) => {
+                declaration.init = transformSuperExpression(declaration.init, options);
+            });
+            return statement;
+        case "IfStatement":
+            statement.test = transformSuperExpression(statement.test, options);
+            statement.consequent = transformSuperStatement(statement.consequent, options);
+            if (statement.alternate) {
+                statement.alternate = transformSuperStatement(statement.alternate, options);
+            }
+            return statement;
+        case "BlockStatement":
+            statement.body = statement.body.map((child) => transformSuperStatement(child, options));
+            return statement;
+        case "ForStatement":
+            if (statement.init && statement.init.type !== "VariableDeclaration") {
+                statement.init = transformSuperExpression(statement.init, options);
+            }
+            if (statement.init && statement.init.type === "VariableDeclaration") {
+                statement.init = transformSuperStatement(statement.init, options);
+            }
+            if (statement.test) statement.test = transformSuperExpression(statement.test, options);
+            if (statement.update) statement.update = transformSuperExpression(statement.update, options);
+            statement.body = transformSuperStatement(statement.body, options);
+            return statement;
+        case "ForInStatement":
+        case "ForOfStatement":
+            if (statement.left && statement.left.type !== "VariableDeclaration") {
+                statement.left = transformSuperExpression(statement.left, options);
+            }
+            if (statement.left && statement.left.type === "VariableDeclaration") {
+                statement.left = transformSuperStatement(statement.left, options);
+            }
+            statement.right = transformSuperExpression(statement.right, options);
+            statement.body = transformSuperStatement(statement.body, options);
+            return statement;
+        case "WhileStatement":
+        case "DoWhileStatement":
+            if (statement.test) statement.test = transformSuperExpression(statement.test, options);
+            statement.body = transformSuperStatement(statement.body, options);
+            return statement;
+        case "SwitchStatement":
+            statement.discriminant = transformSuperExpression(statement.discriminant, options);
+            statement.cases.forEach((switchCase) => {
+                switchCase.test = transformSuperExpression(switchCase.test, options);
+                switchCase.consequent = switchCase.consequent.map((child) => transformSuperStatement(child, options));
+            });
+            return statement;
+        case "TryStatement":
+            statement.block = transformSuperStatement(statement.block, options);
+            if (statement.handler) {
+                statement.handler.body = transformSuperStatement(statement.handler.body, options);
+            }
+            if (statement.finalizer) {
+                statement.finalizer = transformSuperStatement(statement.finalizer, options);
+            }
+            return statement;
+        default:
+            return statement;
+    }
+}
+
+function buildFieldInitializationCode(field, targetCode) {
+    if (field.key.type === "PrivateIdentifier") {
+        throw new Error("Private class fields are not supported");
+    }
+    const accessor = getPropertyAccessorCode(field.key, field.computed);
+    const valueCode = field.value ? escodegen.generate(desugarExpression(field.value)) : "undefined";
+    return `${targetCode}${accessor} = ${valueCode};`;
+}
+
+function buildClassBodyCode(node, className) {
+    const superClassCode = node.superClass ? escodegen.generate(desugarExpression(node.superClass)) : null;
 
     const constructorMethod = node.body.body.find((method) => method.kind === "constructor");
+    const instanceFields = node.body.body.filter((entry) => entry.type === "PropertyDefinition" && !entry.static);
+    const staticFields = node.body.body.filter((entry) => entry.type === "PropertyDefinition" && entry.static);
 
-    const constructorParams = constructorMethod
-        ? constructorMethod.value.params.map((param) => escodegen.generate(param)).join(", ")
-        : "";
-    const constructorBody = constructorMethod
-        ? constructorMethod.value.body.body.map((statement) => escodegen.generate(statement)).join("\n")
-        : "";
+    let constructorParams;
+    let constructorStatements;
+
+    if (constructorMethod) {
+        constructorParams = constructorMethod.value.params.map((param) => escodegen.generate(param)).join(", ");
+        constructorStatements = constructorMethod.value.body.body.map((statement) =>
+            transformSuperStatement(desugarStatement(statement), {
+                superClassCode,
+                isStatic: false,
+                inConstructor: true
+            })
+        );
+    } else if (superClassCode) {
+        constructorParams = "...args";
+        constructorStatements = [parseStatements(`${superClassCode}.apply(this, args);`)[0]];
+    } else {
+        constructorParams = "";
+        constructorStatements = [];
+    }
+
+    const fieldStatements = instanceFields.map((field) => parseStatements(buildFieldInitializationCode(field, "this"))[0]);
+    if (superClassCode) {
+        constructorStatements = [
+            ...(constructorStatements.length ? [constructorStatements[0]] : []),
+            ...fieldStatements,
+            ...constructorStatements.slice(1)
+        ];
+    } else {
+        constructorStatements = [...fieldStatements, ...constructorStatements];
+    }
+
+    const constructorBody = constructorStatements.map((statement) => escodegen.generate(statement)).join("\n");
 
     let code = `function ${className}(${constructorParams}) {\n${constructorBody}\n}\n`;
+
+    if (superClassCode) {
+        code += `${className}.prototype = Object.create(${superClassCode}.prototype);\n`;
+        code += `${className}.prototype.constructor = ${className};\n`;
+        code += `Object.setPrototypeOf(${className}, ${superClassCode});\n`;
+    }
+
     const accessorGroups = new Map();
 
     for (const method of node.body.body) {
         if (method.kind === "constructor") continue;
+        if (method.type === "PropertyDefinition") {
+            continue;
+        }
         if (method.type !== "MethodDefinition") {
             throw new Error(`Unsupported class element: ${method.type}`);
         }
@@ -73,7 +278,15 @@ function buildClassBodyCode(node, className) {
                 ? `${className}${getPropertyAccessorCode(method.key, method.computed)}`
                 : `${className}.prototype${getPropertyAccessorCode(method.key, method.computed)}`;
             const params = method.value.params.map((param) => escodegen.generate(param)).join(", ");
-            const body = method.value.body.body.map((statement) => escodegen.generate(statement)).join("\n");
+            const body = method.value.body.body
+                .map((statement) =>
+                    escodegen.generate(transformSuperStatement(desugarStatement(statement), {
+                        superClassCode,
+                        isStatic: method.static,
+                        inConstructor: false
+                    }))
+                )
+                .join("\n");
 
             code += `${target} = function(${params}) {\n${body}\n};\n`;
             continue;
@@ -107,19 +320,39 @@ function buildClassBodyCode(node, className) {
 
         if (group.get) {
             const params = group.get.value.params.map((param) => escodegen.generate(param)).join(", ");
-            const body = group.get.value.body.body.map((statement) => escodegen.generate(statement)).join("\n");
+            const body = group.get.value.body.body
+                .map((statement) =>
+                    escodegen.generate(transformSuperStatement(desugarStatement(statement), {
+                        superClassCode,
+                        isStatic: group.static,
+                        inConstructor: false
+                    }))
+                )
+                .join("\n");
             descriptorParts.push(`get: function(${params}) {\n${body}\n}`);
         }
 
         if (group.set) {
             const params = group.set.value.params.map((param) => escodegen.generate(param)).join(", ");
-            const body = group.set.value.body.body.map((statement) => escodegen.generate(statement)).join("\n");
+            const body = group.set.value.body.body
+                .map((statement) =>
+                    escodegen.generate(transformSuperStatement(desugarStatement(statement), {
+                        superClassCode,
+                        isStatic: group.static,
+                        inConstructor: false
+                    }))
+                )
+                .join("\n");
             descriptorParts.push(`set: function(${params}) {\n${body}\n}`);
         }
 
         descriptorParts.push("configurable: true");
 
         code += `Object.defineProperty(${target}, ${keyCode}, {${descriptorParts.join(", ")}});\n`;
+    }
+
+    for (const field of staticFields) {
+        code += `${buildFieldInitializationCode(field, className)}\n`;
     }
 
     return code;

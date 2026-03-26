@@ -171,5 +171,81 @@ console.log(demo());
         expect(virtualizedOutput.trim()).toBe("v:9");
     });
 
+    test("supports class fields and static fields inside virtualized functions", async () => {
+        const code = `
+// @virtualize
+function demo() {
+  class FingerprintBox {
+    prefix = "field";
+    value = 11;
+    static kind = "static";
+    static salt = 5;
+
+    render() {
+      return this.prefix + ":" + this.value + ":" + FingerprintBox.kind + ":" + FingerprintBox.salt;
+    }
+  }
+
+  return new FingerprintBox().render();
+}
+
+console.log(demo());
+`;
+
+        const {originalOutput, virtualizedOutput} = await transpileAndRun(code, "class-fields");
+        expect(virtualizedOutput).toBe(originalOutput);
+        expect(virtualizedOutput.trim()).toBe("field:11:static:5");
+    });
+
+    test("supports inheritance and super inside virtualized functions", async () => {
+        const code = `
+// @virtualize
+function demo() {
+  class BaseBox {
+    prefix = "base";
+    static root = "ROOT";
+
+    constructor(seed) {
+      this.seed = seed;
+    }
+
+    render() {
+      return this.prefix + ":" + this.seed;
+    }
+
+    static label() {
+      return this.root;
+    }
+  }
+
+  class ChildBox extends BaseBox {
+    suffix = "child";
+    static root = "CHILD";
+
+    constructor(seed) {
+      super(seed + 1);
+    }
+
+    render() {
+      return super.render() + ":" + this.suffix;
+    }
+
+    static label() {
+      return super.label() + ":" + this.root;
+    }
+  }
+
+  const value = new ChildBox(9).render();
+  return value + ":" + ChildBox.label();
+}
+
+console.log(demo());
+`;
+
+        const {originalOutput, virtualizedOutput} = await transpileAndRun(code, "class-inheritance");
+        expect(virtualizedOutput).toBe(originalOutput);
+        expect(virtualizedOutput.trim()).toBe("base:10:child:CHILD:CHILD");
+    });
+
     test.todo("supports async concurrency across the whole virtualized program");
 });

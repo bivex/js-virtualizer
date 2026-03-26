@@ -114,8 +114,10 @@ main();
   - [x] ternary operators
   - [x] logical operators
   - [x] new expressions
-  - [x] class declarations and class expressions without inheritance/private fields
+  - [x] class declarations and class expressions
   - [x] class getters and setters
+  - [x] class fields and static fields
+  - [x] inheritance and `super`
   - [x] unary operators (typeof, delete, etc.)
   - [x] binary operators
   - [x] update operators
@@ -131,7 +133,7 @@ main();
 - if you try to virtualize a program with async functions running concurrently, it will not work as the transpiler & virtual machine were not designed with concurrency in mind (it is a proof-of-concept, after all). the JSVM currently does not support async functions in the context of the whole program. however, you can use async functions within virtualized function as they have their own context
 - performance is not guaranteed. js-virtualizer is not intended for use in high-performance applications. it is intended for use in applications where you need to protect your code from reverse engineering. For instance, an express server with a virtualized function using for loops handled about 50% of the requests of the non-virtualized counterpart. You can find the implementation in the samples folder and test it out for yourself
 - given the virtual machine, the virtualized function is pretty trivial to reverse engineer. it is recommended that the virtual machine class is obfuscated before use
-- class support currently covers plain class declarations, class expressions, and getters/setters. inheritance, private fields, and class fields are still outside the supported set
+- class support currently covers class declarations, class expressions, getters/setters, class fields, static fields, inheritance, and `super`. private fields and decorator-style features are still outside the supported set
 
 ## Todo
 
@@ -154,7 +156,7 @@ main();
 - [ ] add support for async functions in the context of the whole function
   - currently, you are only able to properly await functions, but not run them concurrently as you would in a normal program
   - ~~async would require complex register management. the registers need to be restored after calling the async function, but some registers may have been mutated by the program before the resolution.~~ this can be mitigated as we can just never drop any variables and keep them for the entire lifetime of the function. however, this would still require async context switching
-- [ ] extend class support to inheritance, private fields, and class fields
+- [ ] extend class support to private fields, decorators, and remaining advanced class syntax
 - [ ] obfuscation passes/optimization passes
 - [ ] obfuscation techniques
   - [x] opcode shuffling and minification (remove unused opcodes, rename opcodes, etc.)
