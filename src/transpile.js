@@ -17,6 +17,8 @@ const acorn = require("acorn");
 const walk = require("acorn-walk");
 const babel = require("@babel/core");
 const decoratorsPlugin = require("@babel/plugin-proposal-decorators");
+const asyncGeneratorFunctionsPlugin = require("@babel/plugin-transform-async-generator-functions");
+const regeneratorPlugin = require("@babel/plugin-transform-regenerator");
 const eslintScope = require("eslint-scope");
 const {readFileSync, writeFileSync} = require("node:fs");
 const path = require("node:path");
@@ -70,37 +72,149 @@ function preprocessDecorators(code, decoratorsMode) {
     return transformed.code;
 }
 
-function assertSupportedSyntax(root) {
-    let firstUnsupported = null;
+function containsGeneratorSyntax(ast) {
+    let hasGenerators = false;
 
-    walk.simple(root, {
+    walk.simple(ast, {
         FunctionDeclaration(node) {
-            if (node.generator && !firstUnsupported) {
-                firstUnsupported = node;
+            if (node.generator) {
+                hasGenerators = true;
             }
         },
         FunctionExpression(node) {
-            if (node.generator && !firstUnsupported) {
-                firstUnsupported = node;
+            if (node.generator) {
+                hasGenerators = true;
             }
         },
-        YieldExpression(node) {
-            if (!firstUnsupported) {
-                firstUnsupported = node;
+        YieldExpression() {
+            hasGenerators = true;
+        }
+    });
+
+    return hasGenerators;
+}
+
+function preprocessGenerators(code) {
+    const transformed = babel.transformSync(code, {
+        configFile: false,
+        babelrc: false,
+        comments: true,
+        retainLines: true,
+        sourceType: "module",
+        plugins: [asyncGeneratorFunctionsPlugin, regeneratorPlugin]
+    });
+
+    if (!transformed || !transformed.code) {
+        throw new Error("Failed to preprocess generators");
+    }
+
+    return transformed.code;
+}
+
+function usesIdentifier(node, name) {
+    let found = false;
+
+    walk.simple(node, {
+        Identifier(identifier) {
+            if (identifier.name === name) {
+                found = true;
             }
         }
     });
 
-    if (!firstUnsupported) {
+    return found;
+}
+
+function preprocessVirtualizedFunctionDeclaration(node, code) {
+    const transformedCode = preprocessGenerators(code.slice(node.start, node.end));
+    const transformedStatements = acorn.parse(transformedCode, {
+        ecmaVersion: "latest",
+        sourceType: "module",
+        locations: true,
+        ranges: true
+    }).body;
+    const target = [...transformedStatements].reverse().find((statement) => statement.type === "FunctionDeclaration" && statement.id && statement.id.name === node.id.name);
+
+    if (!target) {
+        throw new Error(`Failed to locate transformed function declaration for ${node.id?.name ?? "anonymous"}`);
+    }
+
+    target.__virtualize = true;
+    return transformedStatements;
+}
+
+function preprocessVirtualizedFunctionsInList(statements, code, needToVirtualize) {
+    for (let index = 0; index < statements.length; index++) {
+        const statement = statements[index];
+
+        if (!statement) {
+            continue;
+        }
+
+        if (statement.type === "FunctionDeclaration") {
+            if (needToVirtualize(statement)) {
+                if (containsGeneratorSyntax(statement)) {
+                    const replacement = preprocessVirtualizedFunctionDeclaration(statement, code);
+                    statements.splice(index, 1, ...replacement);
+                    index += replacement.length - 1;
+                    continue;
+                }
+                statement.__virtualize = true;
+            }
+
+            preprocessVirtualizedFunctionsInList(statement.body.body, code, needToVirtualize);
+            continue;
+        }
+
+        switch (statement.type) {
+            case "BlockStatement":
+                preprocessVirtualizedFunctionsInList(statement.body, code, needToVirtualize);
+                break;
+            case "IfStatement":
+                preprocessVirtualizedFunctionsInNode(statement.consequent, code, needToVirtualize);
+                preprocessVirtualizedFunctionsInNode(statement.alternate, code, needToVirtualize);
+                break;
+            case "ForStatement":
+            case "ForInStatement":
+            case "ForOfStatement":
+            case "WhileStatement":
+            case "DoWhileStatement":
+            case "LabeledStatement":
+                preprocessVirtualizedFunctionsInNode(statement.body, code, needToVirtualize);
+                break;
+            case "SwitchStatement":
+                for (const switchCase of statement.cases) {
+                    preprocessVirtualizedFunctionsInList(switchCase.consequent, code, needToVirtualize);
+                }
+                break;
+            case "TryStatement":
+                preprocessVirtualizedFunctionsInNode(statement.block, code, needToVirtualize);
+                if (statement.handler) {
+                    preprocessVirtualizedFunctionsInNode(statement.handler.body, code, needToVirtualize);
+                }
+                preprocessVirtualizedFunctionsInNode(statement.finalizer, code, needToVirtualize);
+                break;
+            case "ExportNamedDeclaration":
+            case "ExportDefaultDeclaration":
+                preprocessVirtualizedFunctionsInNode(statement.declaration, code, needToVirtualize);
+                break;
+        }
+    }
+}
+
+function preprocessVirtualizedFunctionsInNode(node, code, needToVirtualize) {
+    if (!node) {
         return;
     }
 
-    const line = firstUnsupported.loc?.start?.line;
-    const column = typeof firstUnsupported.loc?.start?.column === "number"
-        ? firstUnsupported.loc.start.column + 1
-        : null;
-    const location = line ? ` at ${line}:${column ?? 1}` : "";
-    throw new Error(`Generator and async generator functions are not supported yet${location}`);
+    if (node.type === "BlockStatement") {
+        preprocessVirtualizedFunctionsInList(node.body, code, needToVirtualize);
+        return;
+    }
+
+    if (node.type === "FunctionDeclaration") {
+        preprocessVirtualizedFunctionsInList([node], code, needToVirtualize);
+    }
 }
 
 function createArgumentScramblingPlan(paramNames) {
@@ -212,6 +326,8 @@ async function transpile(code, options) {
         });
     }
 
+    preprocessVirtualizedFunctionsInList(ast.body, code, needToVirtualize);
+
     function analyzeScope(ast, functionNode) {
         const scopeManager = eslintScope.analyze(ast, {ecmaVersion: 2021, sourceType: "module"});
         const functionScope = scopeManager.acquire(functionNode);
@@ -230,10 +346,10 @@ async function transpile(code, options) {
 
     function virtualizeFunction(node) {
         log(new LogData(`Virtualizing Function "${node.id.name}"`, 'info', false));
-        assertSupportedSyntax(node);
         const dependencies = analyzeScope(ast, node);
         const integrityKey = crypto.randomBytes(16).toString("hex");
         const memoryProtectionKey = crypto.randomBytes(16).toString("hex");
+        const usesArguments = usesIdentifier(node.body, "arguments");
         const usesThis = (() => {
             let found = false
             walk.simple(node.body, {
@@ -268,6 +384,12 @@ async function transpile(code, options) {
             const register = generator.randomRegister()
             regToDep[register] = "this"
             generator.declareVariable("this", register)
+        }
+
+        if (usesArguments && !node.params.some((param) => param.type === "Identifier" && param.name === "arguments")) {
+            const register = generator.randomRegister()
+            regToDep[register] = "arguments"
+            generator.declareVariable("arguments", register)
         }
 
         const params = []
@@ -347,7 +469,7 @@ async function transpile(code, options) {
 
     walk.simple(ast, {
         FunctionDeclaration(node) {
-            if (needToVirtualize(node)) {
+            if (node.__virtualize) {
                 virtualizeFunction(node);
             }
         },

@@ -17,14 +17,31 @@ const {Opcode, encodeDWORD, encodeArrayRegisters} = require("../utils/assembler"
 const {log, LogData} = require("../utils/log");
 const {registerNames, needsCleanup} = require("../utils/constants");
 const {shuffle} = require("../utils/random");
+const walk = require("acorn-walk");
+
+function usesIdentifier(node, name) {
+    let found = false;
+
+    walk.simple(node, {
+        Identifier(identifier) {
+            if (identifier.name === name) {
+                found = true;
+            }
+        }
+    });
+
+    return found;
+}
 
 // always returns a MUTABLE register, ownership is transferred to the caller
 function resolveFunctionDeclaration(node, options) {
     options = options || {}
     options.declareName = options.declareName ?? `anonymous_${this.generateOpcodeLabel()}`
     options.declareRegister = options.declareRegister ?? this.randomRegister()
+    options.selfName = options.selfName ?? (node.id ? node.id.name : null)
     const hasDynamicThis = node.type !== 'ArrowFunctionExpression'
     const isAsync = !!node.async
+    const usesArguments = hasDynamicThis && usesIdentifier(node.body, 'arguments')
 
     if (options.declareName) {
         log(new LogData(`Declaring function ${options.declareName} at register ${options.declareRegister}`, 'accent', true))
@@ -53,10 +70,25 @@ function resolveFunctionDeclaration(node, options) {
         selfRegister: options.declareRegister
     })
 
+    if (options.selfName && options.selfName !== options.declareName) {
+        this.declareVariable(options.selfName, options.declareRegister, {
+            functionScoped: true
+        })
+    }
+
     if (hasDynamicThis) {
         this.declareVariable('this')
         thisRegister = this.getVariable('this')
         argRegisters.add(thisRegister)
+    }
+
+    let argumentsRegister = null
+    if (usesArguments && !params.some((param) => param.type === 'Identifier' && param.name === 'arguments')) {
+        this.declareVariable('arguments', undefined, {
+            functionScoped: true
+        })
+        argumentsRegister = this.getVariable('arguments')
+        argRegisters.add(argumentsRegister)
     }
 
     for (const param of params) {
@@ -133,7 +165,7 @@ function resolveFunctionDeclaration(node, options) {
     this.exitVFuncContext()
     jumpOver.modifyArgs(encodeDWORD(this.chunk.getCurrentIP() - jumpOverIP))
     this.chunk.append(new Opcode('VFUNC_SETUP_CALLBACK', encodeDWORD(startIP - this.chunk.getCurrentIP()),
-        options.declareRegister, outputRegister, isAsync ? 1 : 0, hasDynamicThis ? 1 : 0, hasDynamicThis ? thisRegister : 0, lastIsRest ? 1 : 0, encodeArrayRegisters(scrambledArgMap), encodeArrayRegisters(argOrder), encodeArrayRegisters(captureMappings)))
+        options.declareRegister, outputRegister, isAsync ? 1 : 0, hasDynamicThis ? 1 : 0, hasDynamicThis ? thisRegister : 0, usesArguments ? 1 : 0, usesArguments ? argumentsRegister : 0, lastIsRest ? 1 : 0, encodeArrayRegisters(scrambledArgMap), encodeArrayRegisters(argOrder), encodeArrayRegisters(captureMappings)))
     this.freeTempLoad(outputRegister)
 
     return {

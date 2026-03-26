@@ -99,6 +99,7 @@ Generated virtualized wrappers also enable protected register storage and dead b
 | Functions | arrow functions | ✅ | |
 | Functions | function expressions | ✅ | |
 | Functions | function declarations | ✅ | |
+| Functions | generators / async generators | ✅ | supported through Babel preprocessing before Acorn parsing; direct functions and generator class methods are covered by regression tests |
 | Functions | external/internal calls | ✅ | preserves `this` for method-style calls |
 | Functions | callbacks | ✅ | |
 | Functions | `this` inside virtualized functions | ✅ | top-level `this` and VM callbacks supported |
@@ -147,12 +148,6 @@ Generated virtualized wrappers also enable protected register storage and dead b
 | Obfuscation | dead code injection | ✅ | transpiled bytecode gets unreachable decoy instruction tails by default |
 | Obfuscation | VM memory protection | ✅ | generated wrappers enable protected register storage with on-read restoration |
 
-### Unsupported
-
-| Area | Feature | Status | Notes |
-| --- | --- | --- | --- |
-| Functions | generators / async generators | ❌ | `yield`-based function bodies are not virtualized yet, including generator class methods; transpilation fails fast with a clear error |
-
 ## Limitations
 
 > [!WARNING]  
@@ -160,10 +155,10 @@ Generated virtualized wrappers also enable protected register storage and dead b
 
 - this project primarily targets server-side javascript runtimes such as node.js, but the distributed VM now runs directly in browser-like environments as long as compressed payloads have access to `globalThis.pako.inflate`
 - async support now covers awaited calls, stored promises, `Promise.all`, async callbacks, nested async virtualized functions, and awaited `try` / `catch` / `finally` paths through regression tests
-- standard class syntax in the support matrix is covered through desugaring, including async methods, but generator-based methods still depend on the broader unsupported `yield` surface
+- decorator and generator syntax are preprocessed through Babel before Acorn parsing. `legacy` + standard (`2023-11`) decorators and `yield`-based generators are covered by regression tests
 - performance is not guaranteed. js-virtualizer is not intended for use in high-performance applications. it is intended for use in applications where you need to protect your code from reverse engineering. For instance, an express server with a virtualized function using for loops handled about 50% of the requests of the non-virtualized counterpart. You can find the implementation in the samples folder and test it out for yourself
 - given the virtual machine, the virtualized function is pretty trivial to reverse engineer. it is recommended that the virtual machine class is obfuscated before use
-- decorator syntax is preprocessed through Babel before Acorn parsing. both `legacy` and standard (`2023-11`) decorator transforms are covered
 - opcode shuffling/minification exists, bytecode strings are encrypted, argument loading is scrambled, and transpiled payloads carry dead-code tails plus protected register storage, but deeper anti-analysis layers are still incomplete
 - bytecode integrity checks now detect tampering of the protected payload, but they are still not a full anti-patching system if an attacker can freely modify both the wrapper and the VM runtime
 - captured variables now flow through shared closure cells across nested VM callbacks and escaped prototype methods, but this is still a correctness feature rather than a hard security boundary
+- proposal-era or otherwise untested syntax outside the matrix may still fail even when nearby standardized syntax works

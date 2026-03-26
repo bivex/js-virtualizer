@@ -536,7 +536,7 @@ function buildMethodFunctionCode(fnNode, body, options = {}) {
     const asyncPrefix = fnNode.async ? "async " : "";
 
     if (fnNode.generator) {
-        throw new Error("Generator and async generator functions are not supported yet");
+        throw new Error("Generator preprocessing did not lower a class method before desugaring");
     }
 
     if (fnNode.async && !allowAsync) {

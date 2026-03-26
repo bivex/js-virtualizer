@@ -800,28 +800,118 @@ demo().then((result) => console.log(result));
         expect(virtualizedData.elapsed).toBeLessThan(170);
     });
 
-    test("fails fast on generator class methods with a clear error", async () => {
-        const slug = `generator-class-method-${crypto.randomBytes(4).toString("hex")}`;
+    test("supports direct generator functions", async () => {
+        const code = `
+// @virtualize
+function* demo() {
+  yield 1;
+  yield 2;
+  return 3;
+}
+
+const iter = demo();
+const first = iter.next();
+const second = iter.next();
+const third = iter.next();
+console.log([first.value, second.value, third.value, third.done].join(":"));
+`;
+
+        const {originalOutput, virtualizedOutput} = await transpileAndRun(code, "generator-function");
+        expect(virtualizedOutput).toBe(originalOutput);
+        expect(virtualizedOutput.trim()).toBe("1:2:3:true");
+    });
+
+    test("supports direct async generator functions", async () => {
+        const code = `
+async function collect(iterable) {
+  const values = [];
+  for await (const value of iterable) {
+    values.push(value);
+  }
+  return values.join(":");
+}
+
+// @virtualize
+async function* demo() {
+  yield await Promise.resolve(1);
+  yield await Promise.resolve(2);
+}
+
+(async () => {
+  console.log(await collect(demo()));
+})();
+`;
+
+        const {originalOutput, virtualizedOutput} = await transpileAndRun(code, "async-generator-function");
+        expect(virtualizedOutput).toBe(originalOutput);
+        expect(virtualizedOutput.trim()).toBe("1:2");
+    });
+
+    test("supports generator class methods inside virtualized functions", async () => {
         const code = `
 // @virtualize
 function demo() {
   class FingerprintBox {
     *values() {
+      yield "a";
+      yield "b";
+    }
+
+    static *codes() {
       yield 1;
       yield 2;
     }
   }
 
-  return Array.from(new FingerprintBox().values()).join(",");
+  return Array.from(new FingerprintBox().values()).join("") + ":" + Array.from(FingerprintBox.codes()).join("");
 }
 
 console.log(demo());
 `;
 
-        await expect(transpile(code, {
-            fileName: `${slug}.js`,
-            writeOutput: false,
-            passes: ["RemoveUnused"]
-        })).rejects.toThrow("Generator and async generator functions are not supported yet");
+        const {originalOutput, virtualizedOutput} = await transpileAndRun(code, "generator-class-methods");
+        expect(virtualizedOutput).toBe(originalOutput);
+        expect(virtualizedOutput.trim()).toBe("ab:12");
+    });
+
+    test("supports async generator class methods inside virtualized functions", async () => {
+        const code = `
+async function collect(iterable) {
+  const values = [];
+  for await (const value of iterable) {
+    values.push(value);
+  }
+  return values.join("");
+}
+
+// @virtualize
+function demo() {
+  class FingerprintBox {
+    async *values() {
+      yield await Promise.resolve("x");
+      yield "y";
+    }
+
+    static async *codes() {
+      yield await Promise.resolve(1);
+      yield 2;
+    }
+  }
+
+  return {
+    values: new FingerprintBox().values(),
+    codes: FingerprintBox.codes()
+  };
+}
+
+(async () => {
+  const {values, codes} = demo();
+  console.log((await collect(values)) + ":" + (await collect(codes)));
+})();
+`;
+
+        const {originalOutput, virtualizedOutput} = await transpileAndRun(code, "async-generator-class-methods");
+        expect(virtualizedOutput).toBe(originalOutput);
+        expect(virtualizedOutput.trim()).toBe("xy:12");
     });
 });

@@ -115,6 +115,8 @@ const implOpcode = {
             isAsync = this.readBool(),
             hasDynamicThis = this.readBool(),
             thisRegister = this.readByte(),
+            usesArguments = this.readBool(),
+            argumentsRegister = this.readByte(),
             useRest = this.readBool(),
             argArrayMapper = this.readArrayRegisters(),
             argOrder = this.readArrayRegisters(),
@@ -145,6 +147,9 @@ const implOpcode = {
             if (hasDynamicThis) {
                 vm.write(thisRegister, thisArg);
             }
+            if (usesArguments) {
+                vm.write(argumentsRegister, args);
+            }
             for (let i = 0; i < argArrayMapper.length; i++) {
                 const sourceIndex = argOrder[i];
                 if (useRest && sourceIndex === restIndex) {
@@ -174,6 +179,9 @@ const implOpcode = {
             const restIndex = argOrder.length - 1;
             if (hasDynamicThis) {
                 fork.write(thisRegister, thisArg);
+            }
+            if (usesArguments) {
+                fork.write(argumentsRegister, args);
             }
             for (let i = 0; i < argArrayMapper.length; i++) {
                 const sourceIndex = argOrder[i];
