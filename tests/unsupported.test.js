@@ -247,6 +247,137 @@ console.log(demo());
         expect(virtualizedOutput.trim()).toBe("base:10:child:CHILD:CHILD");
     });
 
+    test("supports private instance fields inside virtualized functions", async () => {
+        const code = `
+// @virtualize
+function demo() {
+  class FingerprintBox {
+    #seed = 3;
+
+    bump(step) {
+      this.#seed += step;
+      return this.#seed;
+    }
+  }
+
+  const box = new FingerprintBox();
+  return box.bump(4) + ":" + box.bump(5);
+}
+
+console.log(demo());
+`;
+
+        const {originalOutput, virtualizedOutput} = await transpileAndRun(code, "private-instance-fields");
+        expect(virtualizedOutput).toBe(originalOutput);
+        expect(virtualizedOutput.trim()).toBe("7:12");
+    });
+
+    test("supports private static fields inside virtualized functions", async () => {
+        const code = `
+// @virtualize
+function demo() {
+  class FingerprintBox {
+    static #salt = 11;
+
+    static bump(step) {
+      this.#salt += step;
+      return this.#salt;
+    }
+  }
+
+  return FingerprintBox.bump(4) + ":" + FingerprintBox.bump(5);
+}
+
+console.log(demo());
+`;
+
+        const {originalOutput, virtualizedOutput} = await transpileAndRun(code, "private-static-fields");
+        expect(virtualizedOutput).toBe(originalOutput);
+        expect(virtualizedOutput.trim()).toBe("15:20");
+    });
+
+    test("supports private instance methods inside virtualized functions", async () => {
+        const code = `
+// @virtualize
+function demo() {
+  class FingerprintBox {
+    #format(value) {
+      return "m:" + value;
+    }
+
+    render(value) {
+      return this.#format(value + 2);
+    }
+  }
+
+  return new FingerprintBox().render(5);
+}
+
+console.log(demo());
+`;
+
+        const {originalOutput, virtualizedOutput} = await transpileAndRun(code, "private-instance-methods");
+        expect(virtualizedOutput).toBe(originalOutput);
+        expect(virtualizedOutput.trim()).toBe("m:7");
+    });
+
+    test("supports private static methods inside virtualized functions", async () => {
+        const code = `
+// @virtualize
+function demo() {
+  class FingerprintBox {
+    static #format(value) {
+      return "s:" + value;
+    }
+
+    static render(value) {
+      return this.#format(value + 3);
+    }
+  }
+
+  return FingerprintBox.render(6);
+}
+
+console.log(demo());
+`;
+
+        const {originalOutput, virtualizedOutput} = await transpileAndRun(code, "private-static-methods");
+        expect(virtualizedOutput).toBe(originalOutput);
+        expect(virtualizedOutput.trim()).toBe("s:9");
+    });
+
+    test("supports private accessors inside virtualized functions", async () => {
+        const code = `
+// @virtualize
+function demo() {
+  class FingerprintBox {
+    #seed = 1;
+
+    get #value() {
+      return this.#seed + 4;
+    }
+
+    set #value(next) {
+      this.#seed = next * 2;
+    }
+
+    run() {
+      this.#value = 6;
+      return this.#value;
+    }
+  }
+
+  return new FingerprintBox().run();
+}
+
+console.log(demo());
+`;
+
+        const {originalOutput, virtualizedOutput} = await transpileAndRun(code, "private-accessors");
+        expect(virtualizedOutput).toBe(originalOutput);
+        expect(virtualizedOutput.trim()).toBe("16");
+    });
+
     test("supports async concurrency across the whole virtualized program", async () => {
         const slug = `async-concurrency-${crypto.randomBytes(4).toString("hex")}`;
         const code = `

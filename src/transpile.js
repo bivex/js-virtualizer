@@ -115,6 +115,9 @@ async function transpile(code, options) {
                 if (identifier.name === "Object" && !dependencies.includes("Object")) {
                     dependencies.push("Object");
                 }
+                if (identifier.name === "WeakMap" && !dependencies.includes("WeakMap")) {
+                    dependencies.push("WeakMap");
+                }
             }
         });
         const regToDep = {}
