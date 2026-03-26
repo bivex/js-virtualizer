@@ -83,72 +83,72 @@ main();
 
 | Area | Feature | Status | Notes |
 | --- | --- | --- | --- |
-| Variables | `let` / `const` scoping | [x] | block scoping works |
-| Variables | function-scoped `var` | [x] | covered by regression tests |
-| Variables | primitive literals | [x] | strings, numbers, booleans, `null`, `undefined` |
-| Variables | object expressions | [x] | |
-| Variables | array expressions | [x] | |
-| Variables | object destructuring | [x] | |
-| Variables | array destructuring | [x] | |
-| Variables | assignments | [x] | includes compound assignment paths used by tests |
-| Functions | arrow functions | [x] | |
-| Functions | function expressions | [x] | |
-| Functions | function declarations | [x] | |
-| Functions | external/internal calls | [x] | preserves `this` for method-style calls |
-| Functions | callbacks | [x] | |
-| Functions | `this` inside virtualized functions | [x] | top-level `this` and VM callbacks supported |
-| Async | `await` | [x] | |
-| Async | stored promises | [x] | |
-| Async | `Promise.all(...)` style concurrency | [x] | child VM contexts prevent register clobbering |
-| Statements | `return` | [x] | |
-| Statements | `if` / `else if` / `else` | [x] | |
-| Statements | `for` | [x] | |
-| Statements | `for...of` | [x] | |
-| Statements | `for...in` | [x] | |
-| Statements | `while` | [x] | |
-| Statements | `switch` | [x] | |
-| Statements | `try` / `catch` / `finally` | [x] | |
-| Statements | `throw` | [x] | |
-| Statements | `continue` / `break` | [x] | |
-| Expressions | sequence expressions | [x] | |
-| Expressions | template literals | [x] | |
-| Expressions | ternaries | [x] | |
-| Expressions | logical operators | [x] | |
-| Expressions | `new` | [x] | |
-| Expressions | unary operators | [x] | includes `typeof` and `delete` |
-| Expressions | binary operators | [x] | |
-| Expressions | update operators | [x] | |
-| Expressions | comparison operators | [x] | |
-| Expressions | bitwise operators | [x] | |
-| Classes | class declarations | [x] | implemented through desugaring |
-| Classes | class expressions | [x] | |
-| Classes | getters / setters | [x] | public and private |
-| Classes | instance fields | [x] | public and private |
-| Classes | static fields | [x] | public and private |
-| Classes | private methods | [x] | instance and static |
-| Classes | inheritance | [x] | |
-| Classes | `super()` and `super.method()` | [x] | constructor, instance, and static method cases |
+| Variables | `let` / `const` scoping | ✅ | block scoping works |
+| Variables | function-scoped `var` | ✅ | covered by regression tests |
+| Variables | primitive literals | ✅ | strings, numbers, booleans, `null`, `undefined` |
+| Variables | object expressions | ✅ | |
+| Variables | array expressions | ✅ | |
+| Variables | object destructuring | ✅ | |
+| Variables | array destructuring | ✅ | |
+| Variables | assignments | ✅ | includes compound assignment paths used by tests |
+| Functions | arrow functions | ✅ | |
+| Functions | function expressions | ✅ | |
+| Functions | function declarations | ✅ | |
+| Functions | external/internal calls | ✅ | preserves `this` for method-style calls |
+| Functions | callbacks | ✅ | |
+| Functions | `this` inside virtualized functions | ✅ | top-level `this` and VM callbacks supported |
+| Async | `await` | ✅ | |
+| Async | stored promises | ✅ | |
+| Async | `Promise.all(...)` style concurrency | ✅ | child VM contexts prevent register clobbering |
+| Statements | `return` | ✅ | |
+| Statements | `if` / `else if` / `else` | ✅ | |
+| Statements | `for` | ✅ | |
+| Statements | `for...of` | ✅ | |
+| Statements | `for...in` | ✅ | |
+| Statements | `while` | ✅ | |
+| Statements | `switch` | ✅ | |
+| Statements | `try` / `catch` / `finally` | ✅ | |
+| Statements | `throw` | ✅ | |
+| Statements | `continue` / `break` | ✅ | |
+| Expressions | sequence expressions | ✅ | |
+| Expressions | template literals | ✅ | |
+| Expressions | ternaries | ✅ | |
+| Expressions | logical operators | ✅ | |
+| Expressions | `new` | ✅ | |
+| Expressions | unary operators | ✅ | includes `typeof` and `delete` |
+| Expressions | binary operators | ✅ | |
+| Expressions | update operators | ✅ | |
+| Expressions | comparison operators | ✅ | |
+| Expressions | bitwise operators | ✅ | |
+| Classes | class declarations | ✅ | implemented through desugaring |
+| Classes | class expressions | ✅ | |
+| Classes | getters / setters | ✅ | public and private |
+| Classes | instance fields | ✅ | public and private |
+| Classes | static fields | ✅ | public and private |
+| Classes | private methods | ✅ | instance and static |
+| Classes | inheritance | ✅ | |
+| Classes | `super()` and `super.method()` | ✅ | constructor, instance, and static method cases |
 
 ### Partially Supported
 
 | Area | Feature | Status | Notes |
 | --- | --- | --- | --- |
-| Runtime | browser execution | [~] | browser demo works via compatibility wrapper around [`src/vm_dist.js`](src/vm_dist.js) |
-| Async | full async surface | [~] | core concurrency works, but async path is less battle-tested than the sync path |
-| Memory model | captured references in nested functions/protos | [~] | correctness works in common cases, but reference counting / cleanup is still incomplete |
+| Runtime | browser execution | ⚠️ | browser demo works via compatibility wrapper around [`src/vm_dist.js`](src/vm_dist.js) |
+| Async | full async surface | ⚠️ | core concurrency works, but async path is less battle-tested than the sync path |
+| Memory model | captured references in nested functions/protos | ⚠️ | correctness works in common cases, but reference counting / cleanup is still incomplete |
 
 ### Unsupported
 
 | Area | Feature | Status | Notes |
 | --- | --- | --- | --- |
-| Classes | decorators | [ ] | not implemented |
-| Classes | static blocks | [ ] | not implemented |
-| Classes | remaining advanced class syntax | [ ] | class features beyond the matrix above may fail |
-| Obfuscation | argument scrambling | [ ] | not implemented |
-| Obfuscation | string encryption | [ ] | not implemented |
-| Obfuscation | dead code injection | [ ] | not implemented |
-| Obfuscation | VM memory protection | [ ] | register encryption / JIT restore not implemented |
-| Obfuscation | bytecode integrity checks | [ ] | not implemented |
+| Classes | decorators | ❌ | not implemented |
+| Classes | static blocks | ❌ | not implemented |
+| Classes | remaining advanced class syntax | ❌ | class features beyond the matrix above may fail |
+| Obfuscation | argument scrambling | ❌ | not implemented |
+| Obfuscation | string encryption | ❌ | not implemented |
+| Obfuscation | dead code injection | ❌ | not implemented |
+| Obfuscation | VM memory protection | ❌ | register encryption / JIT restore not implemented |
+| Obfuscation | bytecode integrity checks | ❌ | not implemented |
 
 ## Limitations
 
