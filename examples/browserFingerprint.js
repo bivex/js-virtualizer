@@ -99,7 +99,7 @@ async function main() {
     const result = await transpile(sampleCode, {
         fileName: "browser-fingerprint-demo.js",
         writeOutput: false,
-        passes: ["RemoveUnused", "ObfuscateTranspiled"]
+        passes: ["RemoveUnused", "ObfuscateVM", "ObfuscateTranspiled"]
     });
 
     fs.writeFileSync(vmOutputPath, result.vm);
@@ -107,7 +107,7 @@ async function main() {
     fs.writeFileSync(htmlOutputPath, buildHtml());
 
     console.log(`HTML demo: ${htmlOutputPath}`);
-    console.log(`Browser VM: ${vmOutputPath}`);
+    console.log(`Browser VM (obfuscated): ${vmOutputPath}`);
     console.log(`Browser app: ${appOutputPath}`);
     console.log("Open index.html in a browser, or serve the folder with a static server.");
 }

@@ -4,7 +4,7 @@ const zlib = require("node:zlib");
 const {transpile} = require("../src/transpile");
 
 describe("browser execution", () => {
-    test("runs native vm_dist output in a browser-like sandbox without require", async () => {
+    test("runs obfuscated browser runtime output in a browser-like sandbox without require", async () => {
         const source = `
 // @virtualize
 function demo() {
@@ -17,7 +17,7 @@ document.body.textContent = demo();
         const result = await transpile(source, {
             fileName: "browser-runtime.js",
             writeOutput: false,
-            passes: ["RemoveUnused"]
+            passes: ["RemoveUnused", "ObfuscateVM", "ObfuscateTranspiled"]
         });
 
         const document = {
