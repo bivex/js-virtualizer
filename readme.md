@@ -169,19 +169,19 @@ The project already ships several VM hardening layers such as opcode remapping, 
 
 The following VM-oriented techniques used by commercial protectors such as Obfuscator.io are still not implemented here:
 
-| Technique | Status | Notes |
-| --- | --- | --- |
-| dispatcher-level indirect dispatch | ❌ | the VM still dispatches through direct opcode handler lookup rather than an extra indirection layer |
-| per-instruction bytecode encoding | ❌ | protected payloads are validated and decoded at load time, but individual instructions are not decoded just-in-time during execution |
-| whole-bytecode encryption with externalized runtime key | ❌ | there is no `vmBytecodeArrayEncodingKey` / runtime key getter style flow for decrypting the entire bytecode blob |
-| jump target encoding | ❌ | control-flow targets are stored directly in bytecode rather than being re-derived at runtime |
-| decoy opcode handlers | ❌ | dead bytecode exists, but the dispatcher does not yet include fake never-called opcode handlers |
-| macro opcodes / superinstructions | ❌ | common opcode sequences are not yet fused into synthesized macro-operations |
-| stateful or position-dependent opcodes | ❌ | opcode meaning is currently stable for a given build instead of changing by bytecode position or VM state |
-| runtime opcode derivation | ❌ | opcode meaning is not re-derived from a runtime seed or evolving VM state |
-| dedicated VM anti-debug layer | ❌ | the VM runtime does not yet ship a dispatcher-specific anti-debug or DevTools disruption layer |
-| stack-lane encoding equivalent | ❌ | protected register storage exists, but values are not re-encoded on every push/pop or per-step register access |
-| automatic top-level initializer virtualization | ❌ | virtualization is still driven by explicit function targeting instead of auto-wrapping top-level initializers into VM entry points |
+| Technique | Priority | Status | Notes |
+| --- | --- | --- | --- |
+| dispatcher-level indirect dispatch | P0 | ❌ | high-impact VM hardening layer; the VM still dispatches through direct opcode handler lookup rather than an extra indirection layer |
+| whole-bytecode encryption with externalized runtime key | P0 | ❌ | closest missing equivalent to keyed VM payload decryption; there is no `vmBytecodeArrayEncodingKey` / runtime key getter style flow for decrypting the entire bytecode blob |
+| stateful or position-dependent opcodes | P0 | ❌ | one of the strongest anti-pattern-matching upgrades; opcode meaning is currently stable for a given build instead of changing by bytecode position or VM state |
+| jump target encoding | P1 | ❌ | valuable for hiding control flow, but less foundational than keyed payload protection or stateful dispatch |
+| decoy opcode handlers | P1 | ❌ | dead bytecode exists, but the dispatcher does not yet include fake never-called opcode handlers |
+| macro opcodes / superinstructions | P1 | ❌ | useful for breaking recognizable opcode traces; common opcode sequences are not yet fused into synthesized macro-operations |
+| runtime opcode derivation | P1 | ❌ | good follow-up after stateful opcodes; opcode meaning is not re-derived from a runtime seed or evolving VM state |
+| dedicated VM anti-debug layer | P1 | ❌ | the VM runtime does not yet ship a dispatcher-specific anti-debug or DevTools disruption layer |
+| per-instruction bytecode encoding | P2 | ❌ | protected payloads are validated and decoded at load time, but individual instructions are not decoded just-in-time during execution |
+| stack-lane encoding equivalent | P2 | ❌ | protected register storage exists, but values are not re-encoded on every push/pop or per-step register access |
+| automatic top-level initializer virtualization | P2 | ❌ | useful for coverage and convenience, but lower priority than core VM hardening layers |
 
 ## Limitations
 
