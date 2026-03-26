@@ -608,6 +608,7 @@ class FunctionBytecodeGenerator {
                 } else {
                     this.chunk.append(new Opcode('SET_REF', this.outputRegister, out));
                     this.emitDetachForRegisters(this.getCapturedScopeRegisters())
+                    this.chunk.append(new Opcode('END'))
                 }
                 if (needsCleanup(node.argument)) this.freeTempLoad(out)
             }
