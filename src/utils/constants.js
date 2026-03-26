@@ -92,6 +92,12 @@ const opNames = [
     "THROW",
     // [err_register]
     "THROW_ARGUMENT",
+    // [register_a, dword_a, register_b, dword_b, pad]
+    "MACRO_LOAD_DWORD_PAIR",
+    // [test_dest, test_src, jump_register, offset, pad]
+    "MACRO_TEST_JUMP_EQ",
+    // [test_dest, test_src, jump_register, offset, pad]
+    "MACRO_TEST_JUMP_NOT_EQ",
 
     // memory
     // [dest, src]

@@ -262,6 +262,45 @@ function createDeadCodeSequence() {
     ];
 }
 
+function createMacroPaddingByte() {
+    return Buffer.from([crypto.randomInt(0, 256)]);
+}
+
+function applyMacroOpcodes(chunk) {
+    const fused = [];
+
+    for (let index = 0; index < chunk.code.length; index++) {
+        const current = chunk.code[index];
+        const next = chunk.code[index + 1];
+
+        if (current?.name === "LOAD_DWORD" && next?.name === "LOAD_DWORD") {
+            fused.push(new Opcode(
+                "MACRO_LOAD_DWORD_PAIR",
+                Buffer.concat([current.data, next.data, createMacroPaddingByte()])
+            ));
+            index++;
+            continue;
+        }
+
+        if (
+            current?.name === "TEST" &&
+            (next?.name === "JUMP_EQ" || next?.name === "JUMP_NOT_EQ") &&
+            current.data[0] === next.data[0]
+        ) {
+            fused.push(new Opcode(
+                next.name === "JUMP_EQ" ? "MACRO_TEST_JUMP_EQ" : "MACRO_TEST_JUMP_NOT_EQ",
+                Buffer.concat([current.data, next.data, createMacroPaddingByte()])
+            ));
+            index++;
+            continue;
+        }
+
+        fused.push(current);
+    }
+
+    chunk.code = fused;
+}
+
 function injectDeadCode(chunk) {
     const decoySequence = createDeadCodeSequence();
     const decoyLength = decoySequence.reduce((total, opcode) => total + opcode.toBytes().length, 0);
@@ -276,11 +315,46 @@ function injectDeadCode(chunk) {
     decoySequence.forEach((opcode) => chunk.append(opcode));
 }
 
+function getJumpEncodingOffsets(opcodeName) {
+    switch (opcodeName) {
+        case "JUMP_UNCONDITIONAL":
+            return [0];
+        case "JUMP_EQ":
+        case "JUMP_NOT_EQ":
+            return [1];
+        case "TRY_CATCH_FINALLY":
+            return [1, 5];
+        case "MACRO_TEST_JUMP_EQ":
+        case "MACRO_TEST_JUMP_NOT_EQ":
+            return [3];
+        default:
+            return [];
+    }
+}
+
 function applyStatefulOpcodeEncoding(chunk, seed) {
     let position = 0;
 
     for (const opcode of chunk.code) {
         opcode.opcode = Buffer.from([JSVM.encodeStatefulOpcode(opcode.opcode[0], position, seed)]);
+        position += opcode.toBytes().length;
+    }
+}
+
+function applyJumpTargetEncoding(chunk, seed) {
+    let position = 0;
+
+    for (const opcode of chunk.code) {
+        const offsets = getJumpEncodingOffsets(opcode.name);
+
+        if (offsets.length > 0) {
+            opcode.data = Buffer.from(opcode.data);
+            for (const offset of offsets) {
+                const encoded = JSVM.encodeJumpTargetBytes(opcode.data.slice(offset, offset + 4), position + 1 + offset, seed);
+                encoded.copy(opcode.data, offset);
+            }
+        }
+
         position += opcode.toBytes().length;
     }
 }
@@ -362,6 +436,7 @@ async function transpile(code, options) {
         const bytecodeKeyId = `JSVK_${crypto.randomBytes(6).toString("hex")}`;
         const bytecodeEncryptionKey = crypto.randomBytes(24).toString("base64");
         const memoryProtectionKey = crypto.randomBytes(16).toString("hex");
+        const antiDebugKey = crypto.randomBytes(16).toString("hex");
         const usesArguments = usesIdentifier(node.body, "arguments");
         const usesThis = (() => {
             let found = false
@@ -444,6 +519,7 @@ async function transpile(code, options) {
         });
 
         generator.generate();
+        applyMacroOpcodes(generator.chunk);
         if (options.deadCodeInjection) {
             injectDeadCode(generator.chunk);
         }
@@ -457,6 +533,7 @@ async function transpile(code, options) {
             .replace("%MEMORY_PROTECTION_SETUP%", options.memoryProtection ? `VM.enableMemoryProtection('${memoryProtectionKey}');` : "")
             .replace("%ENCODING%", encoding)
             .replace("%BYTECODE_INTEGRITY_KEY%", integrityKey)
+            .replace("%ANTI_DEBUG_SETUP%", `VM.enableAntiDebug('${antiDebugKey}');`)
             .replace("%DEPENDENCIES%", JSON.stringify(regToDep).replace(/"/g, ""))
             .replace("%OUTPUT_REGISTER%", generator.outputRegister.toString())
             .replace("%RUNCMD%", node.async ? "await VM.runAsync()" : "VM.run()");
@@ -496,10 +573,12 @@ async function transpile(code, options) {
 
     rewriteQueue.forEach(({result, node, chunk, integrityKey, bytecodeKeyId, bytecodeEncryptionKey}) => {
         const opcodeSeed = JSVM.deriveOpcodeStateSeed(integrityKey);
+        const jumpSeed = JSVM.deriveJumpTargetSeed(integrityKey);
         applyStatefulOpcodeEncoding(chunk, opcodeSeed);
+        applyJumpTargetEncoding(chunk, jumpSeed);
         const bytecode = zlib.deflateSync(Buffer.from(chunk.toBytes())).toString(encoding);
         const integritySalt = crypto.randomBytes(8).toString("hex");
-        const protectedBytecode = JSVM.createEncryptedBytecodeEnvelope(bytecode, encoding, integrityKey, bytecodeKeyId, bytecodeEncryptionKey, integritySalt);
+        const protectedBytecode = JSVM.createEncryptedBytecodeEnvelope(bytecode, encoding, integrityKey, bytecodeKeyId, bytecodeEncryptionKey, integritySalt, "SJ");
         result = result.replace("%BYTECODE%", protectedBytecode);
         node.body.body = acorn.parse(result, {ecmaVersion: "latest", sourceType: "module"}).body[0].body.body
     })

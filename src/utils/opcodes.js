@@ -148,7 +148,10 @@ const implOpcode = {
             fork.regstack = [];
             fork.registerRefs = new Map(vm.registerRefs);
             fork.statefulOpcodesEnabled = vm.statefulOpcodesEnabled;
+            fork.jumpTargetEncodingEnabled = vm.jumpTargetEncodingEnabled;
+            fork.runtimeOpcodeState = vm.runtimeOpcodeState;
             fork.adoptMemoryProtectionState(vm.memoryProtectionState);
+            fork.adoptAntiDebugState(vm.antiDebugState);
             bindCaptureReferences(fork);
             const restIndex = argOrder.length - 1;
             if (hasDynamicThis) {
@@ -180,7 +183,10 @@ const implOpcode = {
             fork.regstack = [];
             fork.registerRefs = new Map(vm.registerRefs);
             fork.statefulOpcodesEnabled = vm.statefulOpcodesEnabled;
+            fork.jumpTargetEncodingEnabled = vm.jumpTargetEncodingEnabled;
+            fork.runtimeOpcodeState = vm.runtimeOpcodeState;
             fork.adoptMemoryProtectionState(vm.memoryProtectionState);
+            fork.adoptAntiDebugState(vm.antiDebugState);
             bindCaptureReferences(fork);
             const restIndex = argOrder.length - 1;
             if (hasDynamicThis) {
@@ -231,12 +237,12 @@ const implOpcode = {
     },
     JUMP_UNCONDITIONAL: function () {
         const cur = this.read(registers.INSTRUCTION_POINTER);
-        const offset = this.readDWORD();
+        const offset = this.readJumpTargetDWORD();
         this.registers[registers.INSTRUCTION_POINTER] = cur + offset - 1;
     },
     JUMP_EQ: function () {
         const cur = this.read(registers.INSTRUCTION_POINTER);
-        const register = this.readByte(), offset = this.readDWORD();
+        const register = this.readByte(), offset = this.readJumpTargetDWORD();
         if (this.read(register)) {
             log(`Jumping to ${cur + offset - 1}`)
             this.registers[registers.INSTRUCTION_POINTER] = cur + offset - 1;
@@ -244,7 +250,7 @@ const implOpcode = {
     },
     JUMP_NOT_EQ: function () {
         const cur = this.read(registers.INSTRUCTION_POINTER);
-        const register = this.readByte(), offset = this.readDWORD();
+        const register = this.readByte(), offset = this.readJumpTargetDWORD();
         if (!this.read(register)) {
             log(new LogData(`Jumping to ${cur + offset - 1}`, 'accent'))
             this.registers[registers.INSTRUCTION_POINTER] = cur + offset - 1;
@@ -255,7 +261,7 @@ const implOpcode = {
     TRY_CATCH_FINALLY: function () {
         const cur = this.read(registers.INSTRUCTION_POINTER);
         const errorRegister = this.readByte();
-        const catchOffset = this.readDWORD(), finallyOffset = this.readDWORD();
+        const catchOffset = this.readJumpTargetDWORD(), finallyOffset = this.readJumpTargetDWORD();
 
         if (this.executionMode === "async") {
             return (async () => {
@@ -290,6 +296,39 @@ const implOpcode = {
     THROW_ARGUMENT: function () {
         const errRegister = this.readByte();
         throw this.read(errRegister);
+    },
+    MACRO_LOAD_DWORD_PAIR: function () {
+        const firstRegister = this.readByte();
+        const firstValue = this.readDWORD();
+        const secondRegister = this.readByte();
+        const secondValue = this.readDWORD();
+        this.readByte();
+        this.write(firstRegister, firstValue);
+        this.write(secondRegister, secondValue);
+    },
+    MACRO_TEST_JUMP_EQ: function () {
+        const cur = this.read(registers.INSTRUCTION_POINTER);
+        const testDest = this.readByte();
+        const testSrc = this.readByte();
+        const jumpRegister = this.readByte();
+        const offset = this.readJumpTargetDWORD();
+        this.readByte();
+        this.write(testDest, !!this.read(testSrc));
+        if (this.read(jumpRegister)) {
+            this.registers[registers.INSTRUCTION_POINTER] = cur + offset + 2;
+        }
+    },
+    MACRO_TEST_JUMP_NOT_EQ: function () {
+        const cur = this.read(registers.INSTRUCTION_POINTER);
+        const testDest = this.readByte();
+        const testSrc = this.readByte();
+        const jumpRegister = this.readByte();
+        const offset = this.readJumpTargetDWORD();
+        this.readByte();
+        this.write(testDest, !!this.read(testSrc));
+        if (!this.read(jumpRegister)) {
+            this.registers[registers.INSTRUCTION_POINTER] = cur + offset + 2;
+        }
     },
     SET: function () {
         const dest = this.readByte(), src = this.readByte();

@@ -32,6 +32,39 @@ function applyStatefulOpcodeEncoding(chunk, seed) {
     }
 }
 
+function getJumpEncodingOffsets(opcodeName) {
+    switch (opcodeName) {
+        case "JUMP_UNCONDITIONAL":
+            return [0];
+        case "JUMP_EQ":
+        case "JUMP_NOT_EQ":
+            return [1];
+        case "TRY_CATCH_FINALLY":
+            return [1, 5];
+        case "MACRO_TEST_JUMP_EQ":
+        case "MACRO_TEST_JUMP_NOT_EQ":
+            return [3];
+        default:
+            return [];
+    }
+}
+
+function applyJumpTargetEncoding(chunk, seed) {
+    let position = 0;
+
+    for (const opcode of chunk.code) {
+        const offsets = getJumpEncodingOffsets(opcode.name);
+        if (offsets.length > 0) {
+            opcode.data = Buffer.from(opcode.data);
+            for (const offset of offsets) {
+                const encoded = JSVM.encodeJumpTargetBytes(opcode.data.slice(offset, offset + 4), position + 1 + offset, seed);
+                encoded.copy(opcode.data, offset);
+            }
+        }
+        position += opcode.toBytes().length;
+    }
+}
+
 describe("bytecode integrity", () => {
     test("loads protected bytecode when key matches", () => {
         const vm = new JSVM();
@@ -87,9 +120,11 @@ describe("bytecode integrity", () => {
         const bytecodeKey = "runtime-secret-key";
         const salt = "feedc0de";
         const opcodeSeed = JSVM.deriveOpcodeStateSeed(integrityKey);
+        const jumpSeed = JSVM.deriveJumpTargetSeed(integrityKey);
 
         chunk.append(new Opcode("LOAD_DWORD", 3, encodeDWORD(1337)));
         applyStatefulOpcodeEncoding(chunk, opcodeSeed);
+        applyJumpTargetEncoding(chunk, jumpSeed);
 
         const encryptedBytecode = JSVM.createEncryptedBytecodeEnvelope(
             zlib.deflateSync(Buffer.from(chunk.toBytes())).toString("base64"),
@@ -97,7 +132,8 @@ describe("bytecode integrity", () => {
             integrityKey,
             bytecodeKeyId,
             bytecodeKey,
-            salt
+            salt,
+            "SJ"
         );
 
         JSVM.registerBytecodeKey(bytecodeKeyId, bytecodeKey);
@@ -115,9 +151,11 @@ describe("bytecode integrity", () => {
         const bytecodeKeyId = `JSVK_MISSING_${Date.now()}`;
         const salt = "feedc0de";
         const opcodeSeed = JSVM.deriveOpcodeStateSeed(integrityKey);
+        const jumpSeed = JSVM.deriveJumpTargetSeed(integrityKey);
 
         chunk.append(new Opcode("LOAD_DWORD", 3, encodeDWORD(1337)));
         applyStatefulOpcodeEncoding(chunk, opcodeSeed);
+        applyJumpTargetEncoding(chunk, jumpSeed);
 
         const encryptedBytecode = JSVM.createEncryptedBytecodeEnvelope(
             zlib.deflateSync(Buffer.from(chunk.toBytes())).toString("base64"),
@@ -125,12 +163,51 @@ describe("bytecode integrity", () => {
             integrityKey,
             bytecodeKeyId,
             "runtime-secret-key",
-            salt
+            salt,
+            "SJ"
         );
 
         vm.setBytecodeIntegrityKey(integrityKey);
 
         expect(() => vm.loadFromString(encryptedBytecode, "base64")).toThrow("VM decryption key not available");
+    });
+
+    test("loads encrypted bytecode with encoded jump targets", () => {
+        const vm = new JSVM();
+        const chunk = new VMChunk();
+        const integrityKey = "jump-integrity-key";
+        const bytecodeKeyId = "JSVK_JUMP";
+        const bytecodeKey = "jump-runtime-secret";
+        const salt = "c0ffee42";
+        const opcodeSeed = JSVM.deriveOpcodeStateSeed(integrityKey);
+        const jumpSeed = JSVM.deriveJumpTargetSeed(integrityKey);
+
+        chunk.append(new Opcode("LOAD_BOOL", 3, 1));
+        chunk.append(new Opcode("JUMP_EQ", 3, encodeDWORD(13)));
+        chunk.append(new Opcode("LOAD_DWORD", 4, encodeDWORD(7)));
+        chunk.append(new Opcode("END"));
+        chunk.append(new Opcode("LOAD_DWORD", 4, encodeDWORD(42)));
+        chunk.append(new Opcode("END"));
+
+        applyStatefulOpcodeEncoding(chunk, opcodeSeed);
+        applyJumpTargetEncoding(chunk, jumpSeed);
+
+        const encryptedBytecode = JSVM.createEncryptedBytecodeEnvelope(
+            zlib.deflateSync(Buffer.from(chunk.toBytes())).toString("base64"),
+            "base64",
+            integrityKey,
+            bytecodeKeyId,
+            bytecodeKey,
+            salt,
+            "SJ"
+        );
+
+        JSVM.registerBytecodeKey(bytecodeKeyId, bytecodeKey);
+        vm.setBytecodeIntegrityKey(integrityKey);
+        vm.loadFromString(encryptedBytecode, "base64");
+        vm.run();
+
+        expect(vm.registers[4]).toBe(42);
     });
 
     test("virtualized wrappers fail fast when protected payload is modified", async () => {

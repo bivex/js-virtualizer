@@ -53,6 +53,14 @@ function decodeEmbeddedBytecode(transpiledSource, vmSource) {
     return vm.code;
 }
 
+function extractVmOpNames(vmSource) {
+    const match = vmSource.match(/const opNames = (\[[^;]+\])/s);
+    if (!match) {
+        throw new Error("Failed to extract VM opNames array");
+    }
+    return Function(`return ${match[1]};`)();
+}
+
 describe("obfuscation features", () => {
     test("encrypts string payloads in bytecode while preserving runtime behavior", () => {
         const secret = "ultra-secret-token";
@@ -182,6 +190,56 @@ console.log(demo());
             expect(result.transpiled).toContain(keyId);
         }
         expect(result.transpiled).toContain("JSCX1:");
+    });
+
+    test("synthesizes macro opcodes for common opcode traces", async () => {
+        const result = await transpile(`
+// @virtualize
+function demo(flag) {
+  const left = 1;
+  const right = 2;
+  if (flag) {
+    return left + right;
+  }
+  return right - left;
+}
+
+console.log(demo(true));
+`, {
+            fileName: "obfuscation-macros.js",
+            writeOutput: false,
+            passes: ["RemoveUnused"]
+        });
+
+        const opNames = extractVmOpNames(result.vm);
+
+        expect(opNames.some((name) => name.startsWith("MACRO_"))).toBe(true);
+    });
+
+    test("dispatcher includes decoy handlers and runtime-derived alias slots", () => {
+        const vm = new JSVM().setBytecodeIntegrityKey("dispatcher-probe");
+        const aliasSlots = vm.dispatchLookup.filter((slots) => Array.isArray(slots) && slots.length > 1);
+        const previousState = vm.runtimeOpcodeState;
+
+        expect(vm.dispatchHandlers.length).toBeGreaterThan(vm.dispatchLookup.length);
+        expect(vm.dispatchSlotKinds).toContain("decoy");
+        expect(aliasSlots.length).toBeGreaterThan(0);
+
+        vm.advanceRuntimeOpcodeState(7, 19);
+
+        expect(vm.runtimeOpcodeState).not.toBe(previousState);
+    });
+
+    test("anti-debug sweep perturbs runtime state after suspicious pauses", () => {
+        const vm = new JSVM().setBytecodeIntegrityKey("anti-debug-probe").enableAntiDebug("anti-debug-probe");
+        const previousState = vm.runtimeOpcodeState;
+
+        vm.antiDebugState.instructionCount = 8;
+        vm.antiDebugState.lastStepAt = Date.now() - 5000;
+        vm.runAntiDebugSweep(24);
+
+        expect(vm.antiDebugState.suspicionScore).toBeGreaterThan(0);
+        expect(vm.runtimeOpcodeState).not.toBe(previousState);
     });
 
     test("protects register storage and restores values on read", () => {

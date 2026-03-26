@@ -162,11 +162,38 @@ function deriveOpcodeStateSeed(key) {
     return createSeedFromString(`opcode:${String(key ?? "")}`, 0x6d2b79f5) || 0x6d2b79f5;
 }
 
+function deriveJumpTargetSeed(key) {
+    return createSeedFromString(`jump:${String(key ?? "")}`, 0x1f123bb5) || 0x1f123bb5;
+}
+
+function deriveRuntimeDispatchSeed(key) {
+    return createSeedFromString(`dispatch:${String(key ?? "")}`, 0x4f1bbcdc) || 0x4f1bbcdc;
+}
+
+function deriveAntiDebugSeed(key) {
+    return createSeedFromString(`anti-debug:${String(key ?? "")}`, 0x7f4a7c15) || 0x7f4a7c15;
+}
+
 function createOpcodePositionMask(seed, position) {
     let state = (seed ^ Math.imul((position + 1) >>> 0, 0x9e3779b1)) >>> 0;
     state = rotateLeft(state, position % 23 + 5);
     state ^= state >>> 16;
     return state & 0xFF;
+}
+
+function createJumpTargetByteMask(seed, position) {
+    let state = (seed ^ Math.imul((position + 1) >>> 0, 0x27d4eb2d)) >>> 0;
+    state = rotateLeft(state, position % 19 + 3);
+    state ^= state >>> 15;
+    return state & 0xFF;
+}
+
+function transformJumpTargetBytes(input, position, seed) {
+    const data = input instanceof Uint8Array ? new Uint8Array(input) : new Uint8Array(input);
+    for (let index = 0; index < data.length; index++) {
+        data[index] ^= createJumpTargetByteMask(seed >>> 0, (position + index) >>> 0);
+    }
+    return data;
 }
 
 function decodeStatefulOpcode(opcode, position, seed) {
@@ -175,6 +202,21 @@ function decodeStatefulOpcode(opcode, position, seed) {
 
 function isBase64Like(value) {
     return typeof value === "string" && /^[A-Za-z0-9+/=]+$/.test(value);
+}
+
+function normalizeEnvelopeFlags(flags) {
+    const normalizedFlags = new Set(String(flags ?? "S").split("").filter((flag) => /^[A-Z]$/.test(flag)));
+    if (!normalizedFlags.has("S")) {
+        normalizedFlags.add("S");
+    }
+    return Array.from(normalizedFlags).sort().join("");
+}
+
+function mixRuntimeOpcodeState(state, opcode, position, salt = 0) {
+    let next = (state ^ Math.imul((opcode + 1) >>> 0, 0x45d9f3b) ^ Math.imul((position + 1) >>> 0, 0x165667b1) ^ salt) >>> 0;
+    next = rotateLeft(next, opcode % 19 + 5);
+    next = Math.imul((next ^ (next >>> 16)) >>> 0, 0x27d4eb2d) >>> 0;
+    return next || 0x9e3779b9;
 }
 
 function resolveRegisteredBytecodeKey(keyId) {
@@ -200,25 +242,25 @@ function unpackBytecodeEnvelope(code, format, key) {
         return {
             payload: code,
             encrypted: false,
-            statefulOpcodes: false
+            statefulOpcodes: false,
+            jumpTargetEncoding: false
         };
     }
 
     if (code.startsWith(`${BYTECODE_ENCRYPTED_PREFIX}:`)) {
-        const start = BYTECODE_ENCRYPTED_PREFIX.length + 1;
-        const saltEnd = code.indexOf(":", start);
-        const keyIdEnd = saltEnd === -1 ? -1 : code.indexOf(":", saltEnd + 1);
-        const digestEnd = keyIdEnd === -1 ? -1 : code.indexOf(":", keyIdEnd + 1);
-
-        if (saltEnd === -1 || keyIdEnd === -1 || digestEnd === -1) {
+        const parts = code.split(":");
+        if (parts.length < 5) {
             throw new Error("Malformed protected bytecode envelope");
         }
 
-        const salt = code.slice(start, saltEnd);
-        const keyId = code.slice(saltEnd + 1, keyIdEnd);
-        const expectedDigest = code.slice(keyIdEnd + 1, digestEnd);
-        const payload = code.slice(digestEnd + 1);
-        const actualDigest = createBytecodeIntegrityDigest(`${keyId}:${payload}`, salt, key, format);
+        const salt = parts[1];
+        const keyId = parts[2];
+        const hasFlags = !/^[a-f0-9]{32}$/i.test(parts[3]);
+        const flags = hasFlags ? normalizeEnvelopeFlags(parts[3]) : "S";
+        const expectedDigest = hasFlags ? parts[4] : parts[3];
+        const payload = hasFlags ? parts.slice(5).join(":") : parts.slice(4).join(":");
+        const digestInput = hasFlags ? `${keyId}:${flags}:${payload}` : `${keyId}:${payload}`;
+        const actualDigest = createBytecodeIntegrityDigest(digestInput, salt, key, format);
 
         if (expectedDigest !== actualDigest) {
             throw new Error("Bytecode integrity check failed");
@@ -234,7 +276,8 @@ function unpackBytecodeEnvelope(code, format, key) {
         return {
             payload: decryptedPayload,
             encrypted: true,
-            statefulOpcodes: true
+            statefulOpcodes: flags.includes("S"),
+            jumpTargetEncoding: flags.includes("J")
         };
     }
 
@@ -242,7 +285,8 @@ function unpackBytecodeEnvelope(code, format, key) {
         return {
             payload: code,
             encrypted: false,
-            statefulOpcodes: false
+            statefulOpcodes: false,
+            jumpTargetEncoding: false
         };
     }
 
@@ -266,7 +310,34 @@ function unpackBytecodeEnvelope(code, format, key) {
     return {
         payload,
         encrypted: false,
-        statefulOpcodes: false
+        statefulOpcodes: false,
+        jumpTargetEncoding: false
+    };
+}
+
+function createAntiDebugState(key) {
+    return {
+        enabled: true,
+        key: String(key ?? ""),
+        seed: deriveAntiDebugSeed(key),
+        suspicionScore: 0,
+        appliedSuspicion: 0,
+        instructionCount: 0,
+        lastStepAt: 0,
+        pauseThresholdMs: 1200,
+        sampleInterval: 64,
+        devtoolsThreshold: 160,
+        disruptionCount: 0
+    };
+}
+
+function cloneAntiDebugState(state) {
+    if (!state) {
+        return null;
+    }
+    return {
+        ...state,
+        lastStepAt: 0
     };
 }
 
@@ -367,7 +438,7 @@ function inflateBytecode(buffer) {
 }
 
 const registerNames = ["INSTRUCTION_POINTER", "UNDEFINED", "VOID"]
-const opNames = ["LOAD_BYTE", "LOAD_BOOL", "LOAD_DWORD", "LOAD_FLOAT", "LOAD_STRING", "LOAD_ARRAY", "LOAD_OBJECT", "SETUP_OBJECT", "SETUP_ARRAY", "INIT_CONSTRUCTOR", "FUNC_CALL", "FUNC_ARRAY_CALL", "FUNC_ARRAY_CALL_AWAIT", "AWAIT", "VFUNC_CALL", "VFUNC_SETUP_CALLBACK", "VFUNC_RETURN", "JUMP_UNCONDITIONAL", "JUMP_EQ", "JUMP_NOT_EQ", "TRY_CATCH_FINALLY", "THROW", "THROW_ARGUMENT", "SET", "SET_REF", "SET_PROP", "GET_PROP", "SET_INDEX", "GET_INDEX", "WRITE_EXT", "DETACH_REF", "SET_NULL", "SET_UNDEFINED", "EQ_COERCE", "EQ", "NOT_EQ_COERCE", "NOT_EQ", "LESS_THAN", "LESS_THAN_EQ", "GREATER_THAN", "GREATER_THAN_EQ", "TEST", "TEST_NEQ", "ADD", "SUBTRACT", "MULTIPLY", "DIVIDE", "MODULO", "POWER", "AND", "BNOT", "OR", "XOR", "SHIFT_LEFT", "SHIFT_RIGHT", "SPREAD", "SPREAD_INTO", "NOT", "NEGATE", "PLUS", "INCREMENT", "DECREMENT", "TYPEOF", "VOID", "DELETE", "LOGICAL_AND", "LOGICAL_OR", "LOGICAL_NULLISH", "GET_ITERATOR", "ITERATOR_NEXT", "ITERATOR_DONE", "ITERATOR_VALUE", "GET_PROPERTIES", "NOP", "END", "PRINT"]
+const opNames = ["LOAD_BYTE", "LOAD_BOOL", "LOAD_DWORD", "LOAD_FLOAT", "LOAD_STRING", "LOAD_ARRAY", "LOAD_OBJECT", "SETUP_OBJECT", "SETUP_ARRAY", "INIT_CONSTRUCTOR", "FUNC_CALL", "FUNC_ARRAY_CALL", "FUNC_ARRAY_CALL_AWAIT", "AWAIT", "VFUNC_CALL", "VFUNC_SETUP_CALLBACK", "VFUNC_RETURN", "JUMP_UNCONDITIONAL", "JUMP_EQ", "JUMP_NOT_EQ", "TRY_CATCH_FINALLY", "THROW", "THROW_ARGUMENT", "MACRO_LOAD_DWORD_PAIR", "MACRO_TEST_JUMP_EQ", "MACRO_TEST_JUMP_NOT_EQ", "SET", "SET_REF", "SET_PROP", "GET_PROP", "SET_INDEX", "GET_INDEX", "WRITE_EXT", "DETACH_REF", "SET_NULL", "SET_UNDEFINED", "EQ_COERCE", "EQ", "NOT_EQ_COERCE", "NOT_EQ", "LESS_THAN", "LESS_THAN_EQ", "GREATER_THAN", "GREATER_THAN_EQ", "TEST", "TEST_NEQ", "ADD", "SUBTRACT", "MULTIPLY", "DIVIDE", "MODULO", "POWER", "AND", "BNOT", "OR", "XOR", "SHIFT_LEFT", "SHIFT_RIGHT", "SPREAD", "SPREAD_INTO", "NOT", "NEGATE", "PLUS", "INCREMENT", "DECREMENT", "TYPEOF", "VOID", "DELETE", "LOGICAL_AND", "LOGICAL_OR", "LOGICAL_NULLISH", "GET_ITERATOR", "ITERATOR_NEXT", "ITERATOR_DONE", "ITERATOR_VALUE", "GET_PROPERTIES", "NOP", "END", "PRINT"]
 
 const reservedNames = new Set(registerNames)
 reservedNames.delete("VOID")
@@ -475,7 +546,10 @@ const implOpcode = {
             fork.regstack = [];
             fork.registerRefs = new Map(vm.registerRefs);
             fork.statefulOpcodesEnabled = vm.statefulOpcodesEnabled;
+            fork.jumpTargetEncodingEnabled = vm.jumpTargetEncodingEnabled;
+            fork.runtimeOpcodeState = vm.runtimeOpcodeState;
             fork.adoptMemoryProtectionState(vm.memoryProtectionState);
+            fork.adoptAntiDebugState(vm.antiDebugState);
             bindCaptureReferences(fork);
             const restIndex = argOrder.length - 1;
             if (hasDynamicThis) {
@@ -506,7 +580,10 @@ const implOpcode = {
             fork.regstack = [];
             fork.registerRefs = new Map(vm.registerRefs);
             fork.statefulOpcodesEnabled = vm.statefulOpcodesEnabled;
+            fork.jumpTargetEncodingEnabled = vm.jumpTargetEncodingEnabled;
+            fork.runtimeOpcodeState = vm.runtimeOpcodeState;
             fork.adoptMemoryProtectionState(vm.memoryProtectionState);
+            fork.adoptAntiDebugState(vm.antiDebugState);
             bindCaptureReferences(fork);
             const restIndex = argOrder.length - 1;
             if (hasDynamicThis) {
@@ -554,18 +631,18 @@ const implOpcode = {
         this.write(returnDataStore, retValue);
     }, JUMP_UNCONDITIONAL: function () {
         const cur = this.read(registers.INSTRUCTION_POINTER);
-        const offset = this.readDWORD();
+        const offset = this.readJumpTargetDWORD();
         this.registers[registers.INSTRUCTION_POINTER] = cur + offset - 1;
     }, JUMP_EQ: function () {
         const cur = this.read(registers.INSTRUCTION_POINTER);
-        const register = this.readByte(), offset = this.readDWORD();
+        const register = this.readByte(), offset = this.readJumpTargetDWORD();
         if (this.read(register)) {
 
             this.registers[registers.INSTRUCTION_POINTER] = cur + offset - 1;
         }
     }, JUMP_NOT_EQ: function () {
         const cur = this.read(registers.INSTRUCTION_POINTER);
-        const register = this.readByte(), offset = this.readDWORD();
+        const register = this.readByte(), offset = this.readJumpTargetDWORD();
         if (!this.read(register)) {
 
             this.registers[registers.INSTRUCTION_POINTER] = cur + offset - 1;
@@ -575,7 +652,7 @@ const implOpcode = {
     }, TRY_CATCH_FINALLY: function () {
         const cur = this.read(registers.INSTRUCTION_POINTER);
         const errorRegister = this.readByte();
-        const catchOffset = this.readDWORD(), finallyOffset = this.readDWORD();
+        const catchOffset = this.readJumpTargetDWORD(), finallyOffset = this.readJumpTargetDWORD();
         if (this.executionMode === "async") {
             return (async () => {
                 try {
@@ -606,6 +683,36 @@ const implOpcode = {
     }, THROW_ARGUMENT: function () {
         const errRegister = this.readByte();
         throw this.read(errRegister);
+    }, MACRO_LOAD_DWORD_PAIR: function () {
+        const firstRegister = this.readByte();
+        const firstValue = this.readDWORD();
+        const secondRegister = this.readByte();
+        const secondValue = this.readDWORD();
+        this.readByte();
+        this.write(firstRegister, firstValue);
+        this.write(secondRegister, secondValue);
+    }, MACRO_TEST_JUMP_EQ: function () {
+        const cur = this.read(registers.INSTRUCTION_POINTER);
+        const testDest = this.readByte();
+        const testSrc = this.readByte();
+        const jumpRegister = this.readByte();
+        const offset = this.readJumpTargetDWORD();
+        this.readByte();
+        this.write(testDest, !!this.read(testSrc));
+        if (this.read(jumpRegister)) {
+            this.registers[registers.INSTRUCTION_POINTER] = cur + offset + 2;
+        }
+    }, MACRO_TEST_JUMP_NOT_EQ: function () {
+        const cur = this.read(registers.INSTRUCTION_POINTER);
+        const testDest = this.readByte();
+        const testSrc = this.readByte();
+        const jumpRegister = this.readByte();
+        const offset = this.readJumpTargetDWORD();
+        this.readByte();
+        this.write(testDest, !!this.read(testSrc));
+        if (!this.read(jumpRegister)) {
+            this.registers[registers.INSTRUCTION_POINTER] = cur + offset + 2;
+        }
     }, SET: function () {
         const dest = this.readByte(), src = this.readByte();
         this.write(dest, src);
@@ -784,10 +891,16 @@ class JSVM {
         this.opcodes = {}
         this.dispatchHandlers = []
         this.dispatchLookup = []
+        this.dispatchSlotKinds = []
         this.code = null
         this.bytecodeIntegrityKey = ""
         this.opcodeStateSeed = 0
         this.statefulOpcodesEnabled = false
+        this.jumpTargetSeed = 0
+        this.jumpTargetEncodingEnabled = false
+        this.runtimeDispatchSeed = 0
+        this.runtimeOpcodeState = 0
+        this.antiDebugState = null
         this.memoryProtectionState = null
         this.registerRefs = new Map()
         this.executionMode = "sync"
@@ -815,23 +928,125 @@ class JSVM {
         return this
     }
 
-    refreshDispatchTable() {
-        const permutation = createSeededPermutation(opNames.length, this.opcodeStateSeed || 0x9e3779b9);
-        this.dispatchHandlers = new Array(opNames.length);
-        this.dispatchLookup = new Array(opNames.length);
+    static deriveJumpTargetSeed(key) {
+        return deriveJumpTargetSeed(key)
+    }
 
-        for (let slot = 0; slot < permutation.length; slot++) {
-            const opcode = permutation[slot];
-            this.dispatchLookup[opcode] = slot;
-            this.dispatchHandlers[slot] = this.opcodes[opcode];
+    static encodeJumpTargetBytes(bytes, position, seed) {
+        return transformJumpTargetBytes(bytes, position, seed)
+    }
+
+    refreshDispatchTable() {
+        const realPermutation = createSeededPermutation(opNames.length, this.opcodeStateSeed || 0x9e3779b9);
+        const entries = [];
+
+        for (const opcode of realPermutation) {
+            const aliasCount = 2 + (createOpcodePositionMask(this.runtimeDispatchSeed || 0x4f1bbcdc, opcode) & 0x1);
+            for (let aliasIndex = 0; aliasIndex < aliasCount; aliasIndex++) {
+                entries.push({
+                    kind: "real",
+                    opcode
+                });
+            }
+        }
+
+        const decoyCount = Math.max(8, Math.ceil(opNames.length / 4));
+        for (let decoyIndex = 0; decoyIndex < decoyCount; decoyIndex++) {
+            entries.push({
+                kind: "decoy",
+                seed: (this.runtimeDispatchSeed ^ Math.imul(decoyIndex + 1, 0x9e3779b1)) >>> 0
+            });
+        }
+
+        const entryOrder = createSeededPermutation(entries.length, (this.runtimeDispatchSeed || 0x4f1bbcdc) ^ 0x7f4a7c15);
+        this.dispatchHandlers = new Array(entries.length);
+        this.dispatchLookup = Array.from({length: opNames.length}, () => []);
+        this.dispatchSlotKinds = new Array(entries.length);
+
+        for (let slot = 0; slot < entryOrder.length; slot++) {
+            const entry = entries[entryOrder[slot]];
+
+            if (entry.kind === "real") {
+                this.dispatchLookup[entry.opcode].push(slot);
+                this.dispatchHandlers[slot] = this.opcodes[entry.opcode];
+                this.dispatchSlotKinds[slot] = "real";
+                continue;
+            }
+
+            this.dispatchHandlers[slot] = (() => {
+                const seed = entry.seed;
+                return () => {
+                    this.runtimeOpcodeState = mixRuntimeOpcodeState(this.runtimeOpcodeState || this.runtimeDispatchSeed || 0x4f1bbcdc, seed & 0xFF, slot, seed);
+                };
+            })();
+            this.dispatchSlotKinds[slot] = "decoy";
         }
     }
 
     setBytecodeIntegrityKey(key) {
         this.bytecodeIntegrityKey = String(key ?? "")
         this.opcodeStateSeed = this.bytecodeIntegrityKey ? deriveOpcodeStateSeed(this.bytecodeIntegrityKey) : 0
+        this.jumpTargetSeed = this.bytecodeIntegrityKey ? deriveJumpTargetSeed(this.bytecodeIntegrityKey) : 0
+        this.runtimeDispatchSeed = this.bytecodeIntegrityKey ? deriveRuntimeDispatchSeed(this.bytecodeIntegrityKey) : 0
+        this.runtimeOpcodeState = this.runtimeDispatchSeed || 0x4f1bbcdc
         this.refreshDispatchTable()
         return this
+    }
+
+    adoptAntiDebugState(state) {
+        this.antiDebugState = cloneAntiDebugState(state);
+        return this;
+    }
+
+    enableAntiDebug(key) {
+        this.antiDebugState = createAntiDebugState(key);
+        this.runtimeOpcodeState = mixRuntimeOpcodeState(this.runtimeOpcodeState || this.runtimeDispatchSeed || 0x4f1bbcdc, this.antiDebugState.seed & 0xFF, 0, this.antiDebugState.seed);
+        return this;
+    }
+
+    runAntiDebugSweep(position) {
+        if (!this.antiDebugState || !this.antiDebugState.enabled) {
+            return;
+        }
+
+        const state = this.antiDebugState;
+        const now = Date.now();
+
+        if (state.lastStepAt && now - state.lastStepAt > state.pauseThresholdMs && state.instructionCount > 4) {
+            state.suspicionScore += 1;
+        }
+
+        if (typeof window !== "undefined" && window) {
+            const widthDelta = Math.abs((window.outerWidth ?? 0) - (window.innerWidth ?? 0));
+            const heightDelta = Math.abs((window.outerHeight ?? 0) - (window.innerHeight ?? 0));
+            if (widthDelta > state.devtoolsThreshold || heightDelta > state.devtoolsThreshold) {
+                state.suspicionScore += 1;
+            }
+            if (state.suspicionScore >= 2 && globalScope.__JSV_DISABLE_DEBUG_TRAPS__ !== true) {
+                try {
+                    Function("debugger")();
+                    state.disruptionCount += 1;
+                } catch (error) {
+                }
+            }
+        }
+
+        state.instructionCount += 1;
+        state.lastStepAt = now;
+
+        if (state.suspicionScore > state.appliedSuspicion) {
+            this.runtimeOpcodeState = mixRuntimeOpcodeState(this.runtimeOpcodeState || this.runtimeDispatchSeed || 0x4f1bbcdc, state.seed & 0xFF, position, state.suspicionScore);
+            state.appliedSuspicion = state.suspicionScore;
+        }
+    }
+
+    advanceRuntimeOpcodeState(opcode, position) {
+        this.runtimeOpcodeState = mixRuntimeOpcodeState(
+            this.runtimeOpcodeState || this.runtimeDispatchSeed || 0x4f1bbcdc,
+            opcode,
+            position,
+            this.antiDebugState ? this.antiDebugState.suspicionScore : 0
+        );
     }
 
     adoptMemoryProtectionState(state) {
@@ -950,12 +1165,15 @@ class JSVM {
         }
     }
 
-    resolveOpcodeHandler(opcode) {
-        const slot = this.dispatchLookup[opcode]
-        if (slot === undefined) {
+    resolveOpcodeHandler(opcode, position = 0) {
+        const slots = this.dispatchLookup[opcode]
+        if (!slots || slots.length === 0) {
             return null
         }
-        return this.dispatchHandlers[slot] ?? null
+        const aliasIndex = slots.length === 1
+            ? 0
+            : createOpcodePositionMask(this.runtimeOpcodeState || this.runtimeDispatchSeed || 0x4f1bbcdc, position) % slots.length
+        return this.dispatchHandlers[slots[aliasIndex]] ?? null
     }
 
     readBool() {
@@ -985,6 +1203,18 @@ class JSVM {
 
     readDWORD() {
         return this.readByte() << 24 | this.readByte() << 16 | this.readByte() << 8 | this.readByte()
+    }
+
+    readJumpTargetDWORD() {
+        const position = this.read(registers.INSTRUCTION_POINTER);
+        const bytes = new Uint8Array([this.readByte(), this.readByte(), this.readByte(), this.readByte()]);
+
+        if (!this.jumpTargetEncodingEnabled || !this.jumpTargetSeed) {
+            return ((bytes[0] << 24) | (bytes[1] << 16) | (bytes[2] << 8) | bytes[3]);
+        }
+
+        const decoded = transformJumpTargetBytes(bytes, position, this.jumpTargetSeed);
+        return ((decoded[0] << 24) | (decoded[1] << 16) | (decoded[2] << 8) | decoded[3]);
     }
 
     readFloat() {
@@ -1029,6 +1259,7 @@ class JSVM {
         const envelope = unpackBytecodeEnvelope(code, format, this.bytecodeIntegrityKey)
         code = envelope.payload
         this.statefulOpcodesEnabled = envelope.statefulOpcodes
+        this.jumpTargetEncodingEnabled = envelope.jumpTargetEncoding
         if (!format) {
 
             this.code = code
@@ -1061,12 +1292,14 @@ class JSVM {
     run() {
         this.executionMode = "sync"
         while (true) {
-            const {opcode} = this.readOpcode()
+            const {opcode, position} = this.readOpcode()
             if (opcode === undefined || opNames[opcode] === "END") {
                 break
             }
-            const handler = this.resolveOpcodeHandler(opcode)
+            this.runAntiDebugSweep(position)
+            const handler = this.resolveOpcodeHandler(opcode, position)
             if (!handler) {
+                this.advanceRuntimeOpcodeState(opcode, position)
                 continue
             }
             try {
@@ -1074,6 +1307,8 @@ class JSVM {
             } catch (e) {
 
                 throw e
+            } finally {
+                this.advanceRuntimeOpcodeState(opcode, position)
             }
         }
     }
@@ -1081,12 +1316,14 @@ class JSVM {
     async runAsync() {
         this.executionMode = "async"
         while (true) {
-            const {opcode} = this.readOpcode()
+            const {opcode, position} = this.readOpcode()
             if (opcode === undefined || opNames[opcode] === "END") {
                 break
             }
-            const handler = this.resolveOpcodeHandler(opcode)
+            this.runAntiDebugSweep(position)
+            const handler = this.resolveOpcodeHandler(opcode, position)
             if (!handler) {
+                this.advanceRuntimeOpcodeState(opcode, position)
                 continue
             }
 
@@ -1095,6 +1332,8 @@ class JSVM {
             } catch (e) {
 
                 throw e
+            } finally {
+                this.advanceRuntimeOpcodeState(opcode, position)
             }
         }
     }
