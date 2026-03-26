@@ -66,9 +66,12 @@ async function main() {
     // the passes apply to the result before returning
     passes: [
       "RemoveUnused", // whether or not to remove unused opcodes from the instruction set
-      "ObfuscateVM", // whether or not to obfuscate the VM code through js-confuser
-      "ObfuscateTranspiled" // whether or not to obfuscate the transpiled code through js-confuser
-    ]
+      "ObfuscateVM", // whether or not to obfuscate the VM code through javascript-obfuscator
+      "ObfuscateTranspiled" // whether or not to obfuscate the transpiled code through javascript-obfuscator
+    ],
+    // optional javascript-obfuscator targets for each output kind
+    vmObfuscationTarget: "node",
+    transpiledObfuscationTarget: "node"
   });
 
   console.log(`Virtualized code saved to: ${result.transpiledOutputPath}`);
@@ -84,10 +87,12 @@ main();
 - `transpiledOutputPath` (string, default: `node_modules/js-virtualizer/output/[name].virtualized.js`) - the path to write the transpiled code to
 - `deadCodeInjection` (bool, default `true`) - whether or not unreachable decoy bytecode should be appended to the protected payload
 - `memoryProtection` (bool, default `true`) - whether or not generated wrappers should enable protected VM register storage before execution
+- `vmObfuscationTarget` (string, default `node`) - javascript-obfuscator target for VM output when `ObfuscateVM` is enabled
+- `transpiledObfuscationTarget` (string, default `node`) - javascript-obfuscator target for transpiled output when `ObfuscateTranspiled` is enabled
 - `passes` (array, default: `["RemoveUnused", "ObfuscateVM", "ObfuscateTranspiled"]`) - an array of passes to apply to the result before returning and writing to a file
   - `RemoveUnused` - whether or not to remove unused opcodes from the instruction set
-  - `ObfuscateVM` - whether or not to obfuscate the VM code through js-confuser
-  - `ObfuscateTranspiled` - whether or not to obfuscate the transpiled code through js-confuser
+  - `ObfuscateVM` - whether or not to obfuscate the VM code through javascript-obfuscator
+  - `ObfuscateTranspiled` - whether or not to obfuscate the transpiled code through javascript-obfuscator
 
 Generated virtualized wrappers now protect embedded bytecode with a per-function integrity envelope. If the protected payload is modified, the VM throws before decompression and execution.
 Generated virtualized wrappers also enable protected register storage and dead bytecode injection by default.
@@ -158,6 +163,26 @@ Generated virtualized wrappers also enable protected register storage and dead b
 | Obfuscation | dead code injection | ✅ | transpiled bytecode gets unreachable decoy instruction tails by default |
 | Obfuscation | VM memory protection | ✅ | generated wrappers enable protected register storage with on-read restoration |
 
+## Roadmap
+
+The project already ships several VM hardening layers such as opcode remapping, bytecode integrity checks, string encryption, dead bytecode injection, argument scrambling, and protected register storage.
+
+The following VM-oriented techniques used by commercial protectors such as Obfuscator.io are still not implemented here:
+
+| Technique | Status | Notes |
+| --- | --- | --- |
+| dispatcher-level indirect dispatch | ❌ | the VM still dispatches through direct opcode handler lookup rather than an extra indirection layer |
+| per-instruction bytecode encoding | ❌ | protected payloads are validated and decoded at load time, but individual instructions are not decoded just-in-time during execution |
+| whole-bytecode encryption with externalized runtime key | ❌ | there is no `vmBytecodeArrayEncodingKey` / runtime key getter style flow for decrypting the entire bytecode blob |
+| jump target encoding | ❌ | control-flow targets are stored directly in bytecode rather than being re-derived at runtime |
+| decoy opcode handlers | ❌ | dead bytecode exists, but the dispatcher does not yet include fake never-called opcode handlers |
+| macro opcodes / superinstructions | ❌ | common opcode sequences are not yet fused into synthesized macro-operations |
+| stateful or position-dependent opcodes | ❌ | opcode meaning is currently stable for a given build instead of changing by bytecode position or VM state |
+| runtime opcode derivation | ❌ | opcode meaning is not re-derived from a runtime seed or evolving VM state |
+| dedicated VM anti-debug layer | ❌ | the VM runtime does not yet ship a dispatcher-specific anti-debug or DevTools disruption layer |
+| stack-lane encoding equivalent | ❌ | protected register storage exists, but values are not re-encoded on every push/pop or per-step register access |
+| automatic top-level initializer virtualization | ❌ | virtualization is still driven by explicit function targeting instead of auto-wrapping top-level initializers into VM entry points |
+
 ## Limitations
 
 > [!WARNING]  
@@ -165,5 +190,5 @@ Generated virtualized wrappers also enable protected register storage and dead b
 
 - performance is not guaranteed. js-virtualizer is not intended for high-performance paths or whole-program virtualization; it is better suited to protecting selected functions where slowdown is acceptable
 - the distributed VM is still realistically reversible if shipped as-is. Obfuscating or hardening the VM runtime is still recommended for production use
-- anti-analysis layers are still incomplete. Integrity checks, string encryption, dead code, and protected register storage raise the bar, but they do not stop an attacker who can freely patch both the wrapper and the VM runtime
+- anti-analysis layers are still incomplete. Integrity checks, string encryption, dead code, and protected register storage raise the bar, but the roadmap items above such as indirect dispatch, stateful opcodes, and whole-bytecode keyed decryption are still missing
 - syntax outside the support matrix, especially proposal-era or otherwise untested constructs, may still fail even when nearby standardized syntax works

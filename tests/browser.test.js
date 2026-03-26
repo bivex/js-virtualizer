@@ -17,7 +17,9 @@ document.body.textContent = demo();
         const result = await transpile(source, {
             fileName: "browser-runtime.js",
             writeOutput: false,
-            passes: ["RemoveUnused", "ObfuscateVM", "ObfuscateTranspiled"]
+            passes: ["RemoveUnused", "ObfuscateVM", "ObfuscateTranspiled"],
+            vmObfuscationTarget: "browser",
+            transpiledObfuscationTarget: "browser"
         });
 
         const document = {
@@ -54,20 +56,9 @@ document.body.textContent = demo();
         nodeVm.runInNewContext(result.vm, runtimeSandbox);
         expect(typeof runtimeSandbox.JSVM).toBe("function");
 
-        const appSandbox = {
-            console,
-            navigator: runtimeSandbox.navigator,
-            screen: runtimeSandbox.screen,
-            document,
-            atob: runtimeSandbox.atob,
-            pako: runtimeSandbox.pako,
-            JSVM: runtimeSandbox.JSVM
-        };
-        appSandbox.globalThis = appSandbox;
-        appSandbox.window = appSandbox;
-        appSandbox.self = appSandbox;
-
-        nodeVm.runInNewContext(result.transpiled, appSandbox);
+        // Browser script tags share one global scope, so the transpiled app
+        // must coexist with the already-loaded VM runtime in the same context.
+        nodeVm.runInNewContext(result.transpiled, runtimeSandbox);
 
         expect(document.body.textContent).toBe("browser:en-US:1440");
     });

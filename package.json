@@ -38,6 +38,6 @@
     "acorn-walk": "^8.3.5",
     "escodegen": "^2.1.0",
     "eslint-scope": "^8.4.0",
-    "js-confuser": "^2.0.0"
+    "javascript-obfuscator": "^5.4.1"
   }
 }

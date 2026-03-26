@@ -281,6 +281,8 @@ async function transpile(code, options) {
     options.decoratorsMode = options.decoratorsMode ?? "legacy";
     options.deadCodeInjection = options.deadCodeInjection ?? true;
     options.memoryProtection = options.memoryProtection ?? true;
+    options.vmObfuscationTarget = options.vmObfuscationTarget ?? "node";
+    options.transpiledObfuscationTarget = options.transpiledObfuscationTarget ?? "node";
     options.fileName = options.fileName ?? crypto.randomBytes(8).toString('hex')
     options.writeOutput = options.writeOutput ?? true;
     options.vmOutputPath = options.vmOutputPath ?? path.join(__dirname, `../output/${options.fileName}.vm.js`);
@@ -491,11 +493,15 @@ async function transpile(code, options) {
     let transpiledResult = escodegen.generate(ast);
 
     if (options.passes.has("ObfuscateVM")) {
-        accompanyingVM = await obfuscateCode(accompanyingVM)
+        accompanyingVM = await obfuscateCode(accompanyingVM, {
+            target: options.vmObfuscationTarget
+        })
     }
 
     if (options.passes.has("ObfuscateTranspiled")) {
-        transpiledResult = await obfuscateCode(transpiledResult)
+        transpiledResult = await obfuscateCode(transpiledResult, {
+            target: options.transpiledObfuscationTarget
+        })
     }
 
     if (options.writeOutput) {

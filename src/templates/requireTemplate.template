@@ -1,9 +1,9 @@
-const JSVM = typeof globalThis !== "undefined" && globalThis.JSVM
+const __JSV_RUNTIME = typeof globalThis !== "undefined" && globalThis.JSVM
     ? globalThis.JSVM
     : typeof require === "function"
         ? require("%VM_PATH%")
         : null;
 
-if (!JSVM) {
+if (!__JSV_RUNTIME) {
     throw new Error("JSVM runtime is not available");
 }
