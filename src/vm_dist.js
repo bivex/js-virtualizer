@@ -93,34 +93,38 @@ const implOpcode = {
     }, VFUNC_SETUP_CALLBACK: function () {
         const cur = this.read(registers.INSTRUCTION_POINTER);
         const fnOffset = this.readDWORD(), dest = this.readByte(), returnDataStore = this.readByte(),
-            useRest = this.readBool(), argArrayMapper = this.readArrayRegisters();
+            hasDynamicThis = this.readBool(), thisRegister = this.readByte(), useRest = this.readBool(), argArrayMapper = this.readArrayRegisters();
 
 
         const mutableRegisters = this.readArrayRegisters();
+        const vm = this;
 
         function cb(...args) {
-            this.regstack.push([this.registers.slice(), returnDataStore]);
+            vm.regstack.push([vm.registers.slice(), returnDataStore]);
+            if (hasDynamicThis) {
+                vm.write(thisRegister, this);
+            }
             for (let i = 0; i < argArrayMapper.length; i++) {
                 if (useRest && i === argArrayMapper.length - 1) {
-                    this.write(argArrayMapper[i], args.slice(i));
+                    vm.write(argArrayMapper[i], args.slice(i));
                     break;
                 }
-                this.write(argArrayMapper[i], args[i]);
+                vm.write(argArrayMapper[i], args[i]);
             }
-            this.registers[registers.INSTRUCTION_POINTER] = cur + fnOffset - 1;
-            this.run()
-            const res = this.read(returnDataStore);
-            const [oldRegisters] = this.regstack.pop();
-            const curRegisters = this.registers.slice();
-            this.registers = oldRegisters;
+            vm.registers[registers.INSTRUCTION_POINTER] = cur + fnOffset - 1;
+            vm.run()
+            const res = vm.read(returnDataStore);
+            const [oldRegisters] = vm.regstack.pop();
+            const curRegisters = vm.registers.slice();
+            vm.registers = oldRegisters;
             for (const mutableRegister of mutableRegisters) {
-                this.registers[mutableRegister] = curRegisters[mutableRegister];
+                vm.registers[mutableRegister] = curRegisters[mutableRegister];
             }
 
             return res
         }
 
-        this.write(dest, cb.bind(this));
+        this.write(dest, cb);
     }, VFUNC_RETURN: function () {
         const internalReturnReg = this.readByte();
         const restoreRegisters = this.readArrayRegisters();
