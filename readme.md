@@ -183,21 +183,14 @@ js-virtualizer adds measurable overhead. The table below comes from a synthetic 
 
 | Mode | Avg per run | Avg per call | Slowdown vs original |
 | --- | --- | --- | --- |
-| Original JS | 1.221 ms (0.001 s) | 0.122 ms (0.0001 s) | 1x |
-| Light VM | 1075.581 ms (1.076 s) | 107.558 ms (0.108 s) | ~881x |
-| Hardened VM (default) | 15902.526 ms (15.903 s) | 1590.252 ms (1.590 s) | ~13024x |
-| Hardened VM, `memoryProtection: false` | ~1083–1153 ms (~1.083–1.153 s) | ~108–115 ms (~0.108–0.115 s) | ~888x |
+| Original JS | 1.313 ms (0.001 s) | 0.131 ms (0.0001 s) | 1x |
+| Light VM | 315.986 ms (0.316 s) | 31.599 ms (0.032 s) | ~241x |
+| Hardened VM (default) | 3021.219 ms (3.021 s) | 302.122 ms (0.302 s) | ~2300x |
+| Hardened VM, `memoryProtection: false` | 320.807 ms (0.321 s) | 32.081 ms (0.032 s) | ~244x |
 
-**Bottleneck:** nearly all overhead in the hardened default profile comes from `memoryProtection`, not from profile randomization. Profiler self-time with the default profile:
+**Bottleneck:** nearly all overhead in the hardened default profile comes from `memoryProtection`, not from profile randomization. Disabling `memoryProtection` brings the hardened profile back to roughly the same cost as the light VM (~244x vs ~241x).
 
-| Function | Self-time |
-| --- | --- |
-| `rotateProtectedRegisters` | 6929 ms |
-| `createProtectedRegisterValue` | 6360 ms |
-| `restoreProtectedRegisterValue` | 2271 ms |
-| `runAntiDebugSweep` | 547 ms |
-
-Disabling `memoryProtection` (and `deadCodeInjection`) brings the hardened profile back to roughly the same cost as the light VM.
+The primary driver of `memoryProtection` cost was `Object.freeze` on every descriptor allocation, which prevented V8 from sharing hidden classes across descriptor objects and blocked JIT inline-cache hits. Removing `Object.freeze` (while keeping all tamper-detection semantics intact) brought the hardened VM from ~13000x to ~2300x slowdown — a **5.3× improvement** in the hot-loop worst case.
 
 > [!NOTE]
 > These numbers are a worst case. A tight compute loop is the scenario most hostile to any VM. For functions that do I/O, DOM work, or infrequent business logic the relative slowdown is much smaller. Benchmark on real project code before deciding which profile to use.
