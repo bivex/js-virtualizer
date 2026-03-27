@@ -183,10 +183,10 @@ js-virtualizer adds measurable overhead. The table below comes from a synthetic 
 
 | Mode | Avg per run | Avg per call | Slowdown vs original |
 | --- | --- | --- | --- |
-| Original JS | 1.221 ms | 0.122 ms | 1x |
-| Light VM | 1075.581 ms | 107.558 ms | ~881x |
-| Hardened VM (default) | 15902.526 ms | 1590.252 ms | ~13024x |
-| Hardened VM, `memoryProtection: false` | ~1083–1153 ms | ~108–115 ms | ~888x |
+| Original JS | 1.221 ms (0.001 s) | 0.122 ms (0.0001 s) | 1x |
+| Light VM | 1075.581 ms (1.076 s) | 107.558 ms (0.108 s) | ~881x |
+| Hardened VM (default) | 15902.526 ms (15.903 s) | 1590.252 ms (1.590 s) | ~13024x |
+| Hardened VM, `memoryProtection: false` | ~1083–1153 ms (~1.083–1.153 s) | ~108–115 ms (~0.108–0.115 s) | ~888x |
 
 **Bottleneck:** nearly all overhead in the hardened default profile comes from `memoryProtection`, not from profile randomization. Profiler self-time with the default profile:
 
