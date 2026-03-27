@@ -177,6 +177,31 @@ Generated virtualized wrappers also enable protected register storage and dead b
 | Obfuscation | stack-lane encoding equivalent | ✅ | protected register wrappers rotate on protected reads/writes and after each VM step to avoid stable stored values |
 | Runtime | automatic top-level initializer virtualization | ✅ | safe top-level variable initializers are auto-wrapped into helper VMs without requiring `// @virtualize` markers |
 
+## Performance
+
+js-virtualizer adds measurable overhead. The table below comes from a synthetic hot-loop benchmark (`compute(50000)`, 10 calls per run, 3 runs) to give a worst-case picture.
+
+| Mode | Avg per run | Avg per call | Slowdown vs original |
+| --- | --- | --- | --- |
+| Original JS | 1.221 ms | 0.122 ms | 1x |
+| Light VM | 1075.581 ms | 107.558 ms | ~881x |
+| Hardened VM (default) | 15902.526 ms | 1590.252 ms | ~13024x |
+| Hardened VM, `memoryProtection: false` | ~1083–1153 ms | ~108–115 ms | ~888x |
+
+**Bottleneck:** nearly all overhead in the hardened default profile comes from `memoryProtection`, not from profile randomization. Profiler self-time with the default profile:
+
+| Function | Self-time |
+| --- | --- |
+| `rotateProtectedRegisters` | 6929 ms |
+| `createProtectedRegisterValue` | 6360 ms |
+| `restoreProtectedRegisterValue` | 2271 ms |
+| `runAntiDebugSweep` | 547 ms |
+
+Disabling `memoryProtection` (and `deadCodeInjection`) brings the hardened profile back to roughly the same cost as the light VM.
+
+> [!NOTE]
+> These numbers are a worst case. A tight compute loop is the scenario most hostile to any VM. For functions that do I/O, DOM work, or infrequent business logic the relative slowdown is much smaller. Benchmark on real project code before deciding which profile to use.
+
 ## Limitations
 
 > [!WARNING]  
