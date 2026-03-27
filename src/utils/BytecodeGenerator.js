@@ -46,11 +46,15 @@ const resolveAssignmentExpression = require("../transformations/AssignmentExpres
 const resolveSwitchStatement = require("../transformations/SwitchStatement");
 
 const TL_COUNT = 30
+const DEFAULT_REGISTER_COUNT = 256
 
 class FunctionBytecodeGenerator {
-    constructor(ast, chunk) {
+    constructor(ast, chunk, options = {}) {
         this.ast = ast;
         this.chunk = chunk || new VMChunk();
+        this.registerCount = Number.isInteger(options.registerCount)
+            ? Math.max(registerNames.length + 1, Math.min(options.registerCount, DEFAULT_REGISTER_COUNT))
+            : DEFAULT_REGISTER_COUNT;
         this.reservedRegisters = new Set()
         this.outputRegister = this.randomRegister();
 
@@ -240,9 +244,20 @@ class FunctionBytecodeGenerator {
     }
 
     randomRegister() {
-        let register = crypto.randomInt(registerNames.length, 256);
+        const availableRegisterCount = this.registerCount - registerNames.length;
+        if (this.reservedRegisters.size >= availableRegisterCount) {
+            throw new Error(`No free VM registers available for registerCount=${this.registerCount}`);
+        }
+
+        let register = crypto.randomInt(registerNames.length, this.registerCount);
+        let attempts = 0;
+        const maxAttempts = Math.max(availableRegisterCount * 2, 32);
         while (this.reservedRegisters.has(register)) {
-            register = crypto.randomInt(registerNames.length, 256);
+            attempts += 1;
+            if (attempts >= maxAttempts) {
+                throw new Error(`Failed to allocate a free VM register for registerCount=${this.registerCount}`);
+            }
+            register = crypto.randomInt(registerNames.length, this.registerCount);
         }
         this.reservedRegisters.add(register);
         return register;
@@ -647,5 +662,6 @@ class FunctionBytecodeGenerator {
 }
 
 module.exports = {
+    DEFAULT_REGISTER_COUNT,
     FunctionBytecodeGenerator
 };

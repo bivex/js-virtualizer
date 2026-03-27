@@ -141,7 +141,7 @@ const implOpcode = {
         }
 
         function runSync(thisArg, args) {
-            const fork = new vm.constructor();
+            const fork = new vm.constructor(vm.getProfile());
             fork.setBytecodeIntegrityKey(vm.bytecodeIntegrityKey);
             fork.code = vm.code;
             fork.registers = vm.captureRegisterSnapshot();
@@ -177,7 +177,7 @@ const implOpcode = {
         }
 
         async function runAsync(thisArg, args) {
-            const fork = new vm.constructor();
+            const fork = new vm.constructor(vm.getProfile());
             fork.setBytecodeIntegrityKey(vm.bytecodeIntegrityKey);
             fork.code = vm.code;
             fork.registers = vm.captureRegisterSnapshot();

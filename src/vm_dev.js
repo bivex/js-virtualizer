@@ -195,6 +195,114 @@ function normalizeEnvelopeFlags(flags) {
     return Array.from(normalizedFlags).sort().join("");
 }
 
+const DISPATCHER_VARIANTS = new Set(["permuted", "clustered", "striped"]);
+const RUNTIME_OPCODE_DERIVATION_MODES = new Set(["hybrid", "stateful", "position"]);
+const DEFAULT_VM_PROFILE = Object.freeze({
+    profileId: "classic",
+    registerCount: 256,
+    dispatcherVariant: "permuted",
+    aliasBaseCount: 2,
+    aliasJitter: 1,
+    decoyCount: Math.max(8, Math.ceil(opNames.length / 4)),
+    decoyStride: 3,
+    runtimeOpcodeDerivation: "hybrid"
+});
+
+function clampInteger(value, min, max, fallback) {
+    if (!Number.isInteger(value)) {
+        return fallback;
+    }
+    return Math.max(min, Math.min(max, value));
+}
+
+function normalizeVMProfile(profile = {}) {
+    const normalized = {
+        ...DEFAULT_VM_PROFILE,
+        ...profile
+    };
+
+    normalized.profileId = String(profile.profileId ?? DEFAULT_VM_PROFILE.profileId);
+    normalized.registerCount = clampInteger(profile.registerCount, registerNames.length + 1, 256, DEFAULT_VM_PROFILE.registerCount);
+    normalized.dispatcherVariant = DISPATCHER_VARIANTS.has(profile.dispatcherVariant)
+        ? profile.dispatcherVariant
+        : DEFAULT_VM_PROFILE.dispatcherVariant;
+    normalized.aliasBaseCount = clampInteger(profile.aliasBaseCount, 1, 4, DEFAULT_VM_PROFILE.aliasBaseCount);
+    normalized.aliasJitter = clampInteger(profile.aliasJitter, 0, 3, DEFAULT_VM_PROFILE.aliasJitter);
+    normalized.decoyCount = clampInteger(profile.decoyCount, 0, 64, DEFAULT_VM_PROFILE.decoyCount);
+    normalized.decoyStride = clampInteger(profile.decoyStride, 1, 8, DEFAULT_VM_PROFILE.decoyStride);
+    normalized.runtimeOpcodeDerivation = RUNTIME_OPCODE_DERIVATION_MODES.has(profile.runtimeOpcodeDerivation)
+        ? profile.runtimeOpcodeDerivation
+        : DEFAULT_VM_PROFILE.runtimeOpcodeDerivation;
+    return normalized;
+}
+
+function interleaveDispatchDecoys(entries, decoys, stride) {
+    const result = [];
+    let realCount = 0;
+    const normalizedStride = Math.max(1, stride || 1);
+
+    for (const entry of entries) {
+        result.push(entry);
+        if (entry.kind !== "real") {
+            continue;
+        }
+        realCount += 1;
+        if (decoys.length > 0 && realCount >= normalizedStride) {
+            result.push(decoys.shift());
+            realCount = 0;
+        }
+    }
+
+    return result.concat(decoys);
+}
+
+function buildDispatchEntries(realEntries, realGroups, decoyEntries, profile, seed) {
+    switch (profile.dispatcherVariant) {
+        case "clustered":
+            return interleaveDispatchDecoys(realEntries.slice(), decoyEntries.slice(), profile.decoyStride);
+        case "striped": {
+            const striped = [];
+            const groups = realGroups.map((group) => group.slice());
+            let hasEntries = true;
+
+            while (hasEntries) {
+                hasEntries = false;
+                for (const group of groups) {
+                    if (group.length === 0) {
+                        continue;
+                    }
+                    striped.push(group.shift());
+                    hasEntries = true;
+                }
+            }
+
+            return interleaveDispatchDecoys(striped, decoyEntries.slice(), profile.decoyStride);
+        }
+        default: {
+            const entries = [...realEntries, ...decoyEntries];
+            const entryOrder = createSeededPermutation(entries.length, seed ^ 0x7f4a7c15);
+            return entryOrder.map((index) => entries[index]);
+        }
+    }
+}
+
+function deriveAliasIndex(profile, slotsLength, opcode, position, runtimeState, runtimeDispatchSeed) {
+    if (slotsLength <= 1) {
+        return 0;
+    }
+
+    switch (profile.runtimeOpcodeDerivation) {
+        case "position":
+            return createOpcodePositionMask(runtimeDispatchSeed || 0x4f1bbcdc, (position ^ opcode) >>> 0) % slotsLength;
+        case "stateful":
+            return createOpcodePositionMask(runtimeState || runtimeDispatchSeed || 0x4f1bbcdc, opcode) % slotsLength;
+        default: {
+            const mixedState = (runtimeState || runtimeDispatchSeed || 0x4f1bbcdc) ^ rotateLeft((position + 1) >>> 0, opcode % 13 + 3);
+            return createOpcodePositionMask(mixedState >>> 0, (position ^ opcode) >>> 0) % slotsLength;
+        }
+    }
+}
+
 function mixRuntimeOpcodeState(state, opcode, position, salt = 0) {
     let next = (state ^ Math.imul((opcode + 1) >>> 0, 0x45d9f3b) ^ Math.imul((position + 1) >>> 0, 0x165667b1) ^ salt) >>> 0;
     next = rotateLeft(next, opcode % 19 + 5);
@@ -401,8 +509,9 @@ function createRegisterReference(value) {
 // compiler is expected to load all dependencies into registers prior to future execution
 // a JSVM instance. a new one should be created for every virtualized function so that they are able to run concurrently without interfering with each other
 class JSVM {
-    constructor() {
-        this.registers = new Array(256).fill(null)
+    constructor(profile = null) {
+        this.vmProfile = normalizeVMProfile(profile ?? undefined)
+        this.registers = new Array(this.vmProfile.registerCount).fill(null)
         this.regstack = []
         this.opcodes = {}
         this.dispatchHandlers = []
@@ -480,35 +589,61 @@ class JSVM {
         return transformInstructionBytes(bytes, instructionPosition, seed)
     }
 
+    static normalizeProfile(profile) {
+        return normalizeVMProfile(profile)
+    }
+
+    getProfile() {
+        return {
+            ...this.vmProfile
+        }
+    }
+
     refreshDispatchTable() {
         const realPermutation = createSeededPermutation(opNames.length, this.opcodeStateSeed || 0x9e3779b9);
-        const entries = [];
+        const realEntries = [];
+        const realGroups = [];
 
         for (const opcode of realPermutation) {
-            const aliasCount = 2 + (createOpcodePositionMask(this.runtimeDispatchSeed || 0x4f1bbcdc, opcode) & 0x1);
+            const aliasCount = this.vmProfile.aliasBaseCount + (
+                this.vmProfile.aliasJitter > 0
+                    ? createOpcodePositionMask(this.runtimeDispatchSeed || 0x4f1bbcdc, opcode) % (this.vmProfile.aliasJitter + 1)
+                    : 0
+            );
+            const group = [];
             for (let aliasIndex = 0; aliasIndex < aliasCount; aliasIndex++) {
-                entries.push({
+                const entry = {
                     kind: "real",
                     opcode
-                });
+                };
+                realEntries.push(entry);
+                group.push(entry);
             }
+            realGroups.push(group);
         }
 
-        const decoyCount = Math.max(8, Math.ceil(opNames.length / 4));
+        const decoyEntries = [];
+        const decoyCount = this.vmProfile.decoyCount;
         for (let decoyIndex = 0; decoyIndex < decoyCount; decoyIndex++) {
-            entries.push({
+            decoyEntries.push({
                 kind: "decoy",
                 seed: (this.runtimeDispatchSeed ^ Math.imul(decoyIndex + 1, 0x9e3779b1)) >>> 0
             });
         }
 
-        const entryOrder = createSeededPermutation(entries.length, (this.runtimeDispatchSeed || 0x4f1bbcdc) ^ 0x7f4a7c15);
+        const entries = buildDispatchEntries(
+            realEntries,
+            realGroups,
+            decoyEntries,
+            this.vmProfile,
+            this.runtimeDispatchSeed || 0x4f1bbcdc
+        );
         this.dispatchHandlers = new Array(entries.length);
         this.dispatchLookup = Array.from({length: opNames.length}, () => []);
         this.dispatchSlotKinds = new Array(entries.length);
 
-        for (let slot = 0; slot < entryOrder.length; slot++) {
-            const entry = entries[entryOrder[slot]];
+        for (let slot = 0; slot < entries.length; slot++) {
+            const entry = entries[slot];
 
             if (entry.kind === "real") {
                 this.dispatchLookup[entry.opcode].push(slot);
@@ -823,9 +958,14 @@ class JSVM {
         if (!slots || slots.length === 0) {
             return null
         }
-        const aliasIndex = slots.length === 1
-            ? 0
-            : createOpcodePositionMask(this.runtimeOpcodeState || this.runtimeDispatchSeed || 0x4f1bbcdc, position) % slots.length
+        const aliasIndex = deriveAliasIndex(
+            this.vmProfile,
+            slots.length,
+            opcode,
+            position,
+            this.runtimeOpcodeState,
+            this.runtimeDispatchSeed
+        )
         return this.dispatchHandlers[slots[aliasIndex]] ?? null
     }
 

@@ -25,7 +25,7 @@ const path = require("node:path");
 const functionWrapperTemplate = readFileSync(path.join(__dirname, "./templates/functionWrapper.template"), "utf-8");
 const requireTemplate = readFileSync(path.join(__dirname, "./templates/requireTemplate.template"), "utf-8");
 const crypto = require("crypto");
-const {FunctionBytecodeGenerator} = require("./utils/BytecodeGenerator");
+const {DEFAULT_REGISTER_COUNT, FunctionBytecodeGenerator} = require("./utils/BytecodeGenerator");
 const {Opcode, encodeDWORD, encodeString} = require("./utils/assembler");
 const escodegen = require("escodegen");
 const {log, LogData} = require("./utils/log");
@@ -34,13 +34,189 @@ const fs = require("node:fs");
 const JSVM = require("./vm_dev");
 const obfuscateCode = require("./postTranspilation/obfuscateCode");
 const obfuscateOpcodes = require("./postTranspilation/obfuscateOpcodes");
+const {opNames} = require("./utils/constants");
 const {desugarStatementList} = require("./utils/desugar");
 const {shuffle} = require("./utils/random");
 
 const vmDist = fs.readFileSync(path.join(__dirname, './vm_dist.js'), 'utf-8');
 const encodings = ['base64']
+const VM_PROFILE_REGISTER_BUCKETS = [96, 112, 128, 144, 160, 176, 192, 208, 224, 240, DEFAULT_REGISTER_COUNT];
+const DISPATCHER_VARIANTS = ["permuted", "clustered", "striped"];
+const OPCODE_DERIVATION_MODES = ["hybrid", "stateful", "position"];
+const DEFAULT_VM_PROFILE = Object.freeze({
+    profileId: "classic",
+    registerCount: DEFAULT_REGISTER_COUNT,
+    dispatcherVariant: "permuted",
+    aliasBaseCount: 2,
+    aliasJitter: 1,
+    decoyCount: Math.max(8, Math.ceil(opNames.length / 4)),
+    decoyStride: 3,
+    runtimeOpcodeDerivation: "hybrid"
+});
 
 if (!fs.existsSync(path.join(__dirname, '../output'))) fs.mkdirSync(path.join(__dirname, '../output'))
+
+function clampInteger(value, min, max, fallback) {
+    if (!Number.isInteger(value)) {
+        return fallback;
+    }
+    return Math.max(min, Math.min(max, value));
+}
+
+function countPatternBindings(node) {
+    if (!node) {
+        return 0;
+    }
+
+    switch (node.type) {
+        case "Identifier":
+            return 1;
+        case "AssignmentPattern":
+            return countPatternBindings(node.left);
+        case "RestElement":
+            return countPatternBindings(node.argument);
+        case "ArrayPattern":
+            return node.elements.reduce((total, element) => total + countPatternBindings(element), 0);
+        case "ObjectPattern":
+            return node.properties.reduce((total, property) => {
+                if (property.type === "RestElement") {
+                    return total + countPatternBindings(property.argument);
+                }
+                return total + countPatternBindings(property.value);
+            }, 0);
+        default:
+            return 0;
+    }
+}
+
+function normalizeVMProfile(profile = {}) {
+    const normalized = {
+        ...DEFAULT_VM_PROFILE,
+        ...profile
+    };
+
+    normalized.profileId = String(profile.profileId ?? DEFAULT_VM_PROFILE.profileId);
+    normalized.registerCount = clampInteger(profile.registerCount, 48, DEFAULT_REGISTER_COUNT, DEFAULT_VM_PROFILE.registerCount);
+    normalized.dispatcherVariant = DISPATCHER_VARIANTS.includes(profile.dispatcherVariant)
+        ? profile.dispatcherVariant
+        : DEFAULT_VM_PROFILE.dispatcherVariant;
+    normalized.aliasBaseCount = clampInteger(profile.aliasBaseCount, 1, 4, DEFAULT_VM_PROFILE.aliasBaseCount);
+    normalized.aliasJitter = clampInteger(profile.aliasJitter, 0, 3, DEFAULT_VM_PROFILE.aliasJitter);
+    normalized.decoyCount = clampInteger(profile.decoyCount, 0, 64, DEFAULT_VM_PROFILE.decoyCount);
+    normalized.decoyStride = clampInteger(profile.decoyStride, 1, 8, DEFAULT_VM_PROFILE.decoyStride);
+    normalized.runtimeOpcodeDerivation = OPCODE_DERIVATION_MODES.includes(profile.runtimeOpcodeDerivation)
+        ? profile.runtimeOpcodeDerivation
+        : DEFAULT_VM_PROFILE.runtimeOpcodeDerivation;
+    return normalized;
+}
+
+function estimateVmRegisterDemand(functionBody, dependencies, params) {
+    let bindingCount = dependencies.length;
+    let complexityWeight = 0;
+    let nestedFunctionCount = 0;
+
+    walk.simple({type: "Program", body: functionBody}, {
+        VariableDeclarator(node) {
+            bindingCount += countPatternBindings(node.id);
+        },
+        FunctionDeclaration(node) {
+            nestedFunctionCount += 1;
+            bindingCount += node.id ? 1 : 0;
+            bindingCount += node.params.reduce((total, param) => total + countPatternBindings(param), 0);
+            complexityWeight += 4;
+        },
+        FunctionExpression(node) {
+            nestedFunctionCount += 1;
+            bindingCount += node.id ? 1 : 0;
+            bindingCount += node.params.reduce((total, param) => total + countPatternBindings(param), 0);
+            complexityWeight += 4;
+        },
+        CatchClause(node) {
+            bindingCount += countPatternBindings(node.param);
+            complexityWeight += 2;
+        },
+        CallExpression() {
+            complexityWeight += 3;
+        },
+        NewExpression() {
+            complexityWeight += 4;
+        },
+        AwaitExpression() {
+            complexityWeight += 3;
+        },
+        TryStatement() {
+            complexityWeight += 4;
+        },
+        ForStatement() {
+            complexityWeight += 2;
+        },
+        ForInStatement() {
+            complexityWeight += 2;
+        },
+        ForOfStatement() {
+            complexityWeight += 2;
+        },
+        WhileStatement() {
+            complexityWeight += 2;
+        },
+        SwitchStatement() {
+            complexityWeight += 2;
+        }
+    });
+
+    const paramBindingCount = params.reduce((total, param) => total + countPatternBindings(param), 0);
+    const demand = 56 + paramBindingCount * 2 + bindingCount * 2 + nestedFunctionCount * 4 + Math.ceil(complexityWeight / 2);
+    return clampInteger(demand, VM_PROFILE_REGISTER_BUCKETS[0], DEFAULT_REGISTER_COUNT - 8, 160);
+}
+
+function createRandomizedVMProfile(functionBody, dependencies, params, baseProfile = {}) {
+    const estimatedDemand = estimateVmRegisterDemand(functionBody, dependencies, params);
+    const viableRegisterBuckets = VM_PROFILE_REGISTER_BUCKETS.filter((count) => count >= estimatedDemand);
+    const registerCount = viableRegisterBuckets[Math.min(
+        crypto.randomInt(0, viableRegisterBuckets.length),
+        Math.max(viableRegisterBuckets.length - 1, 0)
+    )] ?? DEFAULT_REGISTER_COUNT;
+
+    return normalizeVMProfile({
+        profileId: `vm_${crypto.randomBytes(5).toString("hex")}`,
+        registerCount,
+        dispatcherVariant: DISPATCHER_VARIANTS[crypto.randomInt(0, DISPATCHER_VARIANTS.length)],
+        aliasBaseCount: 1 + crypto.randomInt(0, 3),
+        aliasJitter: crypto.randomInt(0, 3),
+        decoyCount: Math.max(6, Math.ceil(opNames.length / (4 + crypto.randomInt(0, 3)))) + crypto.randomInt(0, 6),
+        decoyStride: 2 + crypto.randomInt(0, 4),
+        runtimeOpcodeDerivation: OPCODE_DERIVATION_MODES[crypto.randomInt(0, OPCODE_DERIVATION_MODES.length)],
+        ...baseProfile
+    });
+}
+
+function createVMProfileCandidates(functionBody, dependencies, params, options) {
+    if (options.vmProfile) {
+        return [normalizeVMProfile(options.vmProfile)];
+    }
+
+    if (options.randomizeVMProfiles === false) {
+        return [normalizeVMProfile(DEFAULT_VM_PROFILE)];
+    }
+
+    const randomizedProfile = createRandomizedVMProfile(functionBody, dependencies, params);
+    const candidates = [randomizedProfile];
+    const fallbackBuckets = VM_PROFILE_REGISTER_BUCKETS.filter((count) => count > randomizedProfile.registerCount);
+
+    fallbackBuckets.forEach((registerCount) => {
+        candidates.push(normalizeVMProfile({
+            ...randomizedProfile,
+            profileId: `${randomizedProfile.profileId}_r${registerCount}`,
+            registerCount
+        }));
+    });
+
+    return candidates;
+}
+
+function isRegisterExhaustionError(error) {
+    return /No free VM registers available|Failed to allocate a free VM register/.test(String(error?.message ?? error));
+}
 
 function preprocessDecorators(code, decoratorsMode) {
     try {
@@ -522,6 +698,7 @@ async function transpile(code, options) {
     options.decoratorsMode = options.decoratorsMode ?? "legacy";
     options.deadCodeInjection = options.deadCodeInjection ?? true;
     options.memoryProtection = options.memoryProtection ?? true;
+    options.randomizeVMProfiles = options.randomizeVMProfiles ?? true;
     options.vmObfuscationTarget = options.vmObfuscationTarget ?? "node";
     options.transpiledObfuscationTarget = options.transpiledObfuscationTarget ?? "node";
     options.fileName = options.fileName ?? crypto.randomBytes(8).toString('hex')
@@ -621,77 +798,105 @@ async function transpile(code, options) {
                 }
             }
         });
-        const regToDep = {}
+        const vmProfileCandidates = createVMProfileCandidates(functionBody, dependencies, node.params, options);
+        let generationResult = null;
+        let lastRegisterError = null;
 
-        const generator = new FunctionBytecodeGenerator(functionBody);
+        for (const vmProfile of vmProfileCandidates) {
+            try {
+                const regToDep = {};
+                const generator = new FunctionBytecodeGenerator(functionBody, undefined, {
+                    registerCount: vmProfile.registerCount
+                });
 
-        for (const dependency of dependencies) {
-            const register = generator.randomRegister()
-            regToDep[register] = dependency
-            generator.declareVariable(dependency, register)
-        }
-
-        if (usesThis) {
-            const register = generator.randomRegister()
-            regToDep[register] = "this"
-            generator.declareVariable("this", register)
-        }
-
-        if (usesArguments && !node.params.some((param) => param.type === "Identifier" && param.name === "arguments")) {
-            const register = generator.randomRegister()
-            regToDep[register] = "arguments"
-            generator.declareVariable("arguments", register)
-        }
-
-        const params = []
-
-        for (const arg of node.params) {
-            const register = generator.randomRegister()
-            switch (arg.type) {
-                case "AssignmentPattern":
-                    // unnecessary because we only replace the function body
-                    // log(new LogData(`Resolving nullish parameter ${arg.left.name} = ${arg.right.value}`, 'info', false));
-                    generator.declareVariable(arg.left.name, register)
-                    // generator.resolveExpression(arg)
-                    regToDep[register] = arg.left.name
-                    params.push(arg.left.name)
-                    break
-                case "Identifier":
-                    // log(new LogData(`Resolving parameter ${arg.name}`, 'info', false));
-                    generator.declareVariable(arg.name, register)
-                    regToDep[register] = arg.name
-                    params.push(arg.name)
-                    break
-                case "RestElement":
-                    // log(new LogData(`Resolving rest parameter ${arg.argument.name}`, 'info', false));
-                    generator.declareVariable(arg.argument.name, register)
-                    regToDep[register] = arg.argument.name
-                    params.push(arg.argument.name)
-                    break
-                default: {
-                    throw new Error(`Unsupported argument type: ${arg.type}`)
+                for (const dependency of dependencies) {
+                    const register = generator.randomRegister();
+                    regToDep[register] = dependency;
+                    generator.declareVariable(dependency, register);
                 }
+
+                if (usesThis) {
+                    const register = generator.randomRegister();
+                    regToDep[register] = "this";
+                    generator.declareVariable("this", register);
+                }
+
+                if (usesArguments && !node.params.some((param) => param.type === "Identifier" && param.name === "arguments")) {
+                    const register = generator.randomRegister();
+                    regToDep[register] = "arguments";
+                    generator.declareVariable("arguments", register);
+                }
+
+                const params = [];
+
+                for (const arg of node.params) {
+                    const register = generator.randomRegister();
+                    switch (arg.type) {
+                        case "AssignmentPattern":
+                            generator.declareVariable(arg.left.name, register);
+                            regToDep[register] = arg.left.name;
+                            params.push(arg.left.name);
+                            break;
+                        case "Identifier":
+                            generator.declareVariable(arg.name, register);
+                            regToDep[register] = arg.name;
+                            params.push(arg.name);
+                            break;
+                        case "RestElement":
+                            generator.declareVariable(arg.argument.name, register);
+                            regToDep[register] = arg.argument.name;
+                            params.push(arg.argument.name);
+                            break;
+                        default: {
+                            throw new Error(`Unsupported argument type: ${arg.type}`);
+                        }
+                    }
+                }
+
+                const {aliasSetup, aliasesByParam} = createArgumentScramblingPlan(params);
+                Object.keys(regToDep).forEach((register) => {
+                    if (aliasesByParam[regToDep[register]]) {
+                        regToDep[register] = aliasesByParam[regToDep[register]];
+                    }
+                });
+
+                generator.generate();
+                applyMacroOpcodes(generator.chunk);
+                if (options.deadCodeInjection) {
+                    injectDeadCode(generator.chunk);
+                }
+
+                generationResult = {
+                    aliasSetup,
+                    generator,
+                    params,
+                    regToDep,
+                    vmProfile
+                };
+                break;
+            } catch (error) {
+                if (!isRegisterExhaustionError(error)) {
+                    throw error;
+                }
+                lastRegisterError = error;
             }
         }
 
-        const {aliasSetup, aliasesByParam} = createArgumentScramblingPlan(params);
-        Object.keys(regToDep).forEach((register) => {
-            if (aliasesByParam[regToDep[register]]) {
-                regToDep[register] = aliasesByParam[regToDep[register]];
+        if (!generationResult) {
+            if (options.vmProfile) {
+                throw new Error(`VM profile registerCount is too small (${options.vmProfile.registerCount ?? "unknown"}). Increase vmProfile.registerCount.`);
             }
-        });
-
-        generator.generate();
-        applyMacroOpcodes(generator.chunk);
-        if (options.deadCodeInjection) {
-            injectDeadCode(generator.chunk);
+            throw lastRegisterError ?? new Error("Failed to allocate registers for randomized VM profile");
         }
+
+        const {aliasSetup, generator, params, regToDep, vmProfile} = generationResult;
         chunks.push(generator.chunk)
 
         const virtualizedFunction = functionWrapperTemplate
             .replace("%FN_PREFIX%", node.async ? "async " : "")
             .replace("%FUNCTION_NAME%", node.id.name)
             .replace("%ARGS%", params.join(","))
+            .replace("%VM_PROFILE%", JSON.stringify(vmProfile))
             .replace("%ARG_SCRAMBLE_SETUP%", aliasSetup)
             .replace("%MEMORY_PROTECTION_SETUP%", options.memoryProtection ? `VM.enableMemoryProtection('${memoryProtectionKey}');` : "")
             .replace("%ENCODING%", encoding)
@@ -710,6 +915,7 @@ async function transpile(code, options) {
         if (dependentTemploads.length > 0) {
             log(new LogData(`Warning: Non-freed tempload(s) detected: ${dependentTemploads.join(", ")}`, 'warn', false));
         }
+        log(new LogData(`VM profile ${vmProfile.profileId}: ${vmProfile.registerCount} regs, ${vmProfile.dispatcherVariant} dispatcher`, 'accent', false));
         log(new LogData(`Successfully Virtualized Function "${node.id.name}"`, 'success', false));
         log(`Dependencies: ${JSON.stringify(dependencies)}`);
         rewriteQueue.push({
@@ -718,7 +924,8 @@ async function transpile(code, options) {
             chunk: generator.chunk,
             integrityKey,
             bytecodeKeyId,
-            bytecodeEncryptionKey
+            bytecodeEncryptionKey,
+            vmProfile
         })
     }
 
