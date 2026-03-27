@@ -471,7 +471,7 @@ function cloneAntiDebugState(state) {
     };
 }
 
-function createMemoryProtectionState(key) {
+function createMemoryProtectionState(key, numProtected) {
     const normalizedKey = String(key ?? "");
     let seed = 0x9e3779b9;
     for (let i = 0; i < normalizedKey.length; i++) {
@@ -497,12 +497,12 @@ function createProtectedRegisterValue(state, register, value) {
     const laneSeed = (state.seed ^ Math.imul(state.laneEpoch, 0x9e3779b1)) >>> 0;
     const maskedToken = (token ^ createRegisterProtectionMask(laneSeed, register)) >>> 0;
     const guard = rotateLeft((maskedToken ^ laneSeed ^ register) >>> 0, 11);
-    return Object.freeze({
+    return {
         __jsvmProtected: true,
         token: maskedToken,
         guard,
         laneEpoch: state.laneEpoch
-    });
+    };
 }
 
 function restoreProtectedRegisterValue(state, register, value, options = {}) {
@@ -1244,7 +1244,7 @@ class JSVM {
                 value: this.readStored(register)
             });
         }
-        this.memoryProtectionState = createMemoryProtectionState(key);
+        this.memoryProtectionState = createMemoryProtectionState(key, this.registers.length - registerNames.length);
         existingValues.forEach(({register, value}) => {
             if (value !== null) {
                 this.registers[register] = createProtectedRegisterValue(this.memoryProtectionState, register, value);
