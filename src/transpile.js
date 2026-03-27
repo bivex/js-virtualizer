@@ -43,6 +43,9 @@ const encodings = ['base64']
 const VM_PROFILE_REGISTER_BUCKETS = [96, 112, 128, 144, 160, 176, 192, 208, 224, 240, DEFAULT_REGISTER_COUNT];
 const DISPATCHER_VARIANTS = ["permuted", "clustered", "striped"];
 const OPCODE_DERIVATION_MODES = ["hybrid", "stateful", "position"];
+const HARDENED_DISPATCHER_VARIANTS = ["clustered", "striped"];
+const HARDENED_OPCODE_DERIVATION_MODES = ["hybrid", "stateful"];
+const HARDENED_MIN_REGISTER_COUNT = 192;
 const DEFAULT_VM_PROFILE = Object.freeze({
     profileId: "classic",
     registerCount: DEFAULT_REGISTER_COUNT,
@@ -171,21 +174,27 @@ function estimateVmRegisterDemand(functionBody, dependencies, params) {
 
 function createRandomizedVMProfile(functionBody, dependencies, params, baseProfile = {}) {
     const estimatedDemand = estimateVmRegisterDemand(functionBody, dependencies, params);
-    const viableRegisterBuckets = VM_PROFILE_REGISTER_BUCKETS.filter((count) => count >= estimatedDemand);
-    const registerCount = viableRegisterBuckets[Math.min(
-        crypto.randomInt(0, viableRegisterBuckets.length),
-        Math.max(viableRegisterBuckets.length - 1, 0)
-    )] ?? DEFAULT_REGISTER_COUNT;
+    const hardenedRegisterFloor = Math.max(estimatedDemand, HARDENED_MIN_REGISTER_COUNT);
+    const viableRegisterBuckets = VM_PROFILE_REGISTER_BUCKETS.filter((count) => count >= hardenedRegisterFloor);
+    const fallbackRegisterBuckets = VM_PROFILE_REGISTER_BUCKETS.filter((count) => count >= estimatedDemand);
+    const registerBucketPool = viableRegisterBuckets.length > 0 ? viableRegisterBuckets : fallbackRegisterBuckets;
+    const registerCount = registerBucketPool[crypto.randomInt(0, registerBucketPool.length)] ?? DEFAULT_REGISTER_COUNT;
+    const dispatcherVariant = HARDENED_DISPATCHER_VARIANTS[crypto.randomInt(0, HARDENED_DISPATCHER_VARIANTS.length)];
+    const runtimeOpcodeDerivation = HARDENED_OPCODE_DERIVATION_MODES[crypto.randomInt(0, HARDENED_OPCODE_DERIVATION_MODES.length)];
+    const aliasBaseCount = 3 + crypto.randomInt(0, 2);
+    const aliasJitter = 2 + crypto.randomInt(0, 2);
+    const decoyCount = Math.max(24, Math.ceil(opNames.length / 2)) + crypto.randomInt(0, 10);
+    const decoyStride = 1 + crypto.randomInt(0, 2);
 
     return normalizeVMProfile({
         profileId: `vm_${crypto.randomBytes(5).toString("hex")}`,
         registerCount,
-        dispatcherVariant: DISPATCHER_VARIANTS[crypto.randomInt(0, DISPATCHER_VARIANTS.length)],
-        aliasBaseCount: 1 + crypto.randomInt(0, 3),
-        aliasJitter: crypto.randomInt(0, 3),
-        decoyCount: Math.max(6, Math.ceil(opNames.length / (4 + crypto.randomInt(0, 3)))) + crypto.randomInt(0, 6),
-        decoyStride: 2 + crypto.randomInt(0, 4),
-        runtimeOpcodeDerivation: OPCODE_DERIVATION_MODES[crypto.randomInt(0, OPCODE_DERIVATION_MODES.length)],
+        dispatcherVariant,
+        aliasBaseCount,
+        aliasJitter,
+        decoyCount,
+        decoyStride,
+        runtimeOpcodeDerivation,
         ...baseProfile
     });
 }

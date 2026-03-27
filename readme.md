@@ -87,7 +87,7 @@ main();
 - `transpiledOutputPath` (string, default: `node_modules/js-virtualizer/output/[name].virtualized.js`) - the path to write the transpiled code to
 - `deadCodeInjection` (bool, default `true`) - whether or not unreachable decoy bytecode should be appended to the protected payload
 - `memoryProtection` (bool, default `true`) - whether or not generated wrappers should enable protected VM register storage before execution
-- `randomizeVMProfiles` (bool, default `true`) - whether or not each virtualized function should synthesize a randomized register-VM profile with per-function register counts and dispatcher variants
+- `randomizeVMProfiles` (bool, default `true`) - whether or not each virtualized function should synthesize a hardened randomized register-VM profile; the default random path now biases toward larger register files, denser decoys, and stronger dispatcher/alias strategies
 - `vmProfile` (object, default `null`) - optional explicit VM profile override; useful when you want to pin `registerCount`, dispatcher variant, alias policy, or opcode-derivation mode
 - `vmObfuscationTarget` (string, default `node`) - javascript-obfuscator target for VM output when `ObfuscateVM` is enabled
 - `transpiledObfuscationTarget` (string, default `node`) - javascript-obfuscator target for transpiled output when `ObfuscateTranspiled` is enabled
@@ -121,7 +121,7 @@ Generated virtualized wrappers also enable protected register storage and dead b
 | Functions | callbacks | ✅ | |
 | Functions | `this` inside virtualized functions | ✅ | top-level `this` and VM callbacks supported |
 | Runtime | browser execution | ✅ | browser-aware `src/vm_dist.js` runs in browser-like runtimes without a compatibility wrapper; compressed payloads use `globalThis.pako.inflate` |
-| Runtime | randomized register VM profiles | ✅ | wrappers can embed per-function register counts plus alternate dispatcher/alias derivation strategies; explicit `vmProfile` overrides are supported |
+| Runtime | randomized register VM profiles | ✅ | wrappers embed hardened per-function VM profiles by default, biased toward larger register files plus stronger dispatcher/alias derivation strategies; explicit `vmProfile` overrides are supported |
 | Async | `await` | ✅ | |
 | Async | stored promises | ✅ | |
 | Async | `Promise.all(...)` style concurrency | ✅ | child VM contexts prevent register clobbering |

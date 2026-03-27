@@ -73,10 +73,14 @@ console.log(demo(2));
         const profile = extractEmbeddedVmProfile(result.transpiled);
 
         expect(profile.profileId).toMatch(/^vm_/);
-        expect(profile.registerCount).toBeGreaterThanOrEqual(96);
+        expect(profile.registerCount).toBeGreaterThanOrEqual(192);
         expect(profile.registerCount).toBeLessThanOrEqual(256);
-        expect(["permuted", "clustered", "striped"]).toContain(profile.dispatcherVariant);
-        expect(["hybrid", "stateful", "position"]).toContain(profile.runtimeOpcodeDerivation);
+        expect(["clustered", "striped"]).toContain(profile.dispatcherVariant);
+        expect(profile.aliasBaseCount).toBeGreaterThanOrEqual(3);
+        expect(profile.aliasJitter).toBeGreaterThanOrEqual(2);
+        expect(profile.decoyCount).toBeGreaterThanOrEqual(24);
+        expect(profile.decoyStride).toBeLessThanOrEqual(2);
+        expect(["hybrid", "stateful"]).toContain(profile.runtimeOpcodeDerivation);
     });
 
     test("transpile honors explicit vmProfile and preserves runtime behavior", async () => {
