@@ -578,7 +578,7 @@ function inflateBytecode(buffer) {
 }
 
 const registerNames = ["INSTRUCTION_POINTER", "UNDEFINED", "VOID"]
-const opNames = ["LOAD_BYTE", "LOAD_BOOL", "LOAD_DWORD", "LOAD_FLOAT", "LOAD_STRING", "LOAD_ARRAY", "LOAD_OBJECT", "SETUP_OBJECT", "SETUP_ARRAY", "INIT_CONSTRUCTOR", "FUNC_CALL", "FUNC_ARRAY_CALL", "FUNC_ARRAY_CALL_AWAIT", "AWAIT", "VFUNC_CALL", "VFUNC_SETUP_CALLBACK", "VFUNC_RETURN", "JUMP_UNCONDITIONAL", "JUMP_EQ", "JUMP_NOT_EQ", "TRY_CATCH_FINALLY", "THROW", "THROW_ARGUMENT", "MACRO_LOAD_DWORD_PAIR", "MACRO_TEST_JUMP_EQ", "MACRO_TEST_JUMP_NOT_EQ", "SET", "SET_REF", "SET_PROP", "GET_PROP", "SET_INDEX", "GET_INDEX", "WRITE_EXT", "DETACH_REF", "SET_NULL", "SET_UNDEFINED", "EQ_COERCE", "EQ", "NOT_EQ_COERCE", "NOT_EQ", "LESS_THAN", "LESS_THAN_EQ", "GREATER_THAN", "GREATER_THAN_EQ", "TEST", "TEST_NEQ", "ADD", "SUBTRACT", "MULTIPLY", "DIVIDE", "MODULO", "POWER", "AND", "BNOT", "OR", "XOR", "SHIFT_LEFT", "SHIFT_RIGHT", "SPREAD", "SPREAD_INTO", "NOT", "NEGATE", "PLUS", "INCREMENT", "DECREMENT", "TYPEOF", "VOID", "DELETE", "LOGICAL_AND", "LOGICAL_OR", "LOGICAL_NULLISH", "GET_ITERATOR", "ITERATOR_NEXT", "ITERATOR_DONE", "ITERATOR_VALUE", "GET_PROPERTIES", "NOP", "END", "PRINT"]
+const opNames = ["LOAD_BYTE", "LOAD_BOOL", "LOAD_DWORD", "LOAD_FLOAT", "LOAD_STRING", "LOAD_ARRAY", "LOAD_OBJECT", "SETUP_OBJECT", "SETUP_ARRAY", "INIT_CONSTRUCTOR", "FUNC_CALL", "FUNC_ARRAY_CALL", "FUNC_ARRAY_CALL_AWAIT", "AWAIT", "VFUNC_CALL", "VFUNC_SETUP_CALLBACK", "VFUNC_RETURN", "JUMP_UNCONDITIONAL", "JUMP_EQ", "JUMP_NOT_EQ", "TRY_CATCH_FINALLY", "THROW", "THROW_ARGUMENT", "MACRO_LOAD_DWORD_PAIR", "MACRO_TEST_JUMP_EQ", "MACRO_TEST_JUMP_NOT_EQ", "CFF_DISPATCH", "SET", "SET_REF", "SET_PROP", "GET_PROP", "SET_INDEX", "GET_INDEX", "WRITE_EXT", "DETACH_REF", "SET_NULL", "SET_UNDEFINED", "EQ_COERCE", "EQ", "NOT_EQ_COERCE", "NOT_EQ", "LESS_THAN", "LESS_THAN_EQ", "GREATER_THAN", "GREATER_THAN_EQ", "TEST", "TEST_NEQ", "ADD", "SUBTRACT", "MULTIPLY", "DIVIDE", "MODULO", "POWER", "AND", "BNOT", "OR", "XOR", "SHIFT_LEFT", "SHIFT_RIGHT", "SPREAD", "SPREAD_INTO", "NOT", "NEGATE", "PLUS", "INCREMENT", "DECREMENT", "TYPEOF", "VOID", "DELETE", "LOGICAL_AND", "LOGICAL_OR", "LOGICAL_NULLISH", "GET_ITERATOR", "ITERATOR_NEXT", "ITERATOR_DONE", "ITERATOR_VALUE", "GET_PROPERTIES", "NOP", "END", "PRINT"]
 
 const reservedNames = new Set(registerNames)
 reservedNames.delete("VOID")
@@ -856,6 +856,19 @@ const implOpcode = {
         if (!this.read(jumpRegister)) {
             this.registers[registers.INSTRUCTION_POINTER] = cur + offset + 2;
         }
+    }, CFF_DISPATCH: function () {
+        const cur = this.read(registers.INSTRUCTION_POINTER);
+        const stateReg = this.readByte();
+        const currentState = this.read(stateReg);
+        const numEntries = this.readDWORD();
+        for (let i = 0; i < numEntries; i++) {
+            const entryState = this.readDWORD();
+            const entryOffset = this.readJumpTargetDWORD();
+            if (currentState === entryState) {
+                this.registers[registers.INSTRUCTION_POINTER] = cur + entryOffset - 1;
+                return;
+            }
+        }
     }, SET: function () {
         const dest = this.readByte(), src = this.readByte();
         this.write(dest, src);
@@ -1051,12 +1064,33 @@ class JSVM {
         this.memoryProtectionState = null
         this.registerRefs = new Map()
         this.executionMode = "sync"
+        this.selfModifyingBytecode = false
+        this.codeBackup = null
+        this.selfModifySeed = 0
         this.registers[registers.INSTRUCTION_POINTER] = 0
         this.registers[registers.UNDEFINED] = undefined
         this.registers[registers.VOID] = 0
         Object.keys(opcodes).forEach((opcode) => {
             this.opcodes[opcodes[opcode]] = implOpcode[opcode].bind(this)
         })
+        const jumpOpcodeNames = ["JUMP_UNCONDITIONAL", "JUMP_EQ", "JUMP_NOT_EQ", "MACRO_TEST_JUMP_EQ", "MACRO_TEST_JUMP_NOT_EQ"]
+        for (const name of jumpOpcodeNames) {
+            const idx = opcodes[name]
+            const originalHandler = this.opcodes[idx]
+            if (originalHandler) {
+                const vm = this
+                this.opcodes[idx] = () => {
+                    const ipBefore = vm.read(registers.INSTRUCTION_POINTER)
+                    originalHandler()
+                    if (vm.selfModifyingBytecode) {
+                        const ipAfter = vm.read(registers.INSTRUCTION_POINTER)
+                        if (ipAfter < ipBefore) {
+                            vm.restoreBytecodeRange(ipAfter, ipBefore)
+                        }
+                    }
+                }
+            }
+        }
         this.refreshDispatchTable()
     }
 
@@ -1184,6 +1218,33 @@ class JSVM {
         this.antiDebugState = createAntiDebugState(key);
         this.runtimeOpcodeState = mixRuntimeOpcodeState(this.runtimeOpcodeState || this.runtimeDispatchSeed || 0x4f1bbcdc, this.antiDebugState.seed & 0xFF, 0, this.antiDebugState.seed);
         return this;
+    }
+
+    enableSelfModifyingBytecode(key) {
+        this.selfModifyingBytecode = true
+        const normalizedKey = String(key ?? "")
+        let seed = 0x5bd1e995
+        for (let i = 0; i < normalizedKey.length; i++) {
+            seed = Math.imul((seed ^ normalizedKey.charCodeAt(i)) >>> 0, 0x45d9f3b) >>> 0
+        }
+        this.selfModifySeed = seed
+        return this
+    }
+
+    scrambleInstruction(startPos, endPos) {
+        if (!this.code || endPos <= startPos) return
+        const mask = ((this.selfModifySeed ^ Math.imul((startPos + 1) >>> 0, 0x165667b1)) >>> 0) & 0xFF
+        for (let i = startPos; i < endPos; i++) {
+            this.code[i] ^= (mask ^ ((i * 7) & 0xFF)) & 0xFF
+        }
+    }
+
+    restoreBytecodeRange(fromPos, toPos) {
+        if (!this.codeBackup || toPos <= fromPos) return
+        for (let i = fromPos; i < toPos; i++) {
+            const mask = ((this.selfModifySeed ^ Math.imul(i + 1, 0x9e3779b1)) >>> 0) & 0xFF
+            this.code[i] = this.codeBackup[i] ^ mask
+        }
     }
 
     runAntiDebugSweep(position) {
@@ -1566,22 +1627,27 @@ class JSVM {
         if (!format) {
 
             this.code = code
-            return
-        }
-        const buffer = decodeBytecodeBuffer(code, format)
-        if (envelope.encrypted) {
-            try {
-                this.code = inflateBytecode(buffer)
-            } catch (error) {
-                throw new Error("VM bytecode decryption failed");
-            }
-            return
-        }
-        if (buffer[0] === 0x78 && buffer[1] === 0x9c) {
-
-            this.code = inflateBytecode(buffer)
         } else {
-            this.code = buffer
+            const buffer = decodeBytecodeBuffer(code, format)
+            if (envelope.encrypted) {
+                try {
+                    this.code = inflateBytecode(buffer)
+                } catch (error) {
+                    throw new Error("VM bytecode decryption failed");
+                }
+            } else if (buffer[0] === 0x78 && buffer[1] === 0x9c) {
+
+                this.code = inflateBytecode(buffer)
+            } else {
+                this.code = buffer
+            }
+        }
+        if (this.selfModifyingBytecode && this.code) {
+            this.codeBackup = new Uint8Array(this.code.length)
+            for (let i = 0; i < this.code.length; i++) {
+                const mask = ((this.selfModifySeed ^ Math.imul(i + 1, 0x9e3779b1)) >>> 0) & 0xFF
+                this.codeBackup[i] = this.code[i] ^ mask
+            }
         }
     }
 
@@ -1616,6 +1682,10 @@ class JSVM {
             } finally {
                 this.advanceRuntimeOpcodeState(opcode, position)
                 this.rotateProtectedRegisters()
+                if (this.selfModifyingBytecode && position !== undefined && this.code) {
+                    const currentIP = this.read(registers.INSTRUCTION_POINTER)
+                    this.scrambleInstruction(position, currentIP)
+                }
                 this.currentInstructionBase = null
             }
         }
@@ -1646,6 +1716,10 @@ class JSVM {
             } finally {
                 this.advanceRuntimeOpcodeState(opcode, position)
                 this.rotateProtectedRegisters()
+                if (this.selfModifyingBytecode && position !== undefined && this.code) {
+                    const currentIP = this.read(registers.INSTRUCTION_POINTER)
+                    this.scrambleInstruction(position, currentIP)
+                }
                 this.currentInstructionBase = null
             }
         }

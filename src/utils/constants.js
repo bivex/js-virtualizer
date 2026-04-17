@@ -98,6 +98,8 @@ const opNames = [
     "MACRO_TEST_JUMP_EQ",
     // [test_dest, test_src, jump_register, offset, pad]
     "MACRO_TEST_JUMP_NOT_EQ",
+    // [stateReg, numEntries:DWORD, (stateId:DWORD, offset:DWORD)×N]
+    "CFF_DISPATCH",
 
     // memory
     // [dest, src]

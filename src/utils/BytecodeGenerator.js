@@ -56,6 +56,9 @@ class FunctionBytecodeGenerator {
             ? Math.max(registerNames.length + 1, Math.min(options.registerCount, DEFAULT_REGISTER_COUNT))
             : DEFAULT_REGISTER_COUNT;
         this.reservedRegisters = new Set()
+        if (options.cffStateRegister !== undefined) {
+            this.reservedRegisters.add(options.cffStateRegister);
+        }
         this.outputRegister = this.randomRegister();
 
         // for arithmetics and loading values

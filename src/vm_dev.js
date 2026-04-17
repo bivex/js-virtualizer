@@ -532,12 +532,33 @@ class JSVM {
         this.memoryProtectionState = null
         this.registerRefs = new Map()
         this.executionMode = "sync"
+        this.selfModifyingBytecode = false
+        this.codeBackup = null
+        this.selfModifySeed = 0
         this.registers[registers.INSTRUCTION_POINTER] = 0
         this.registers[registers.UNDEFINED] = undefined
         this.registers[registers.VOID] = 0
         Object.keys(opcodes).forEach((opcode) => {
             this.opcodes[opcodes[opcode]] = implOpcode[opcode].bind(this)
         })
+        // Wrap jump handlers with self-modifying bytecode restore logic
+        const jumpOpcodeNames = ["JUMP_UNCONDITIONAL", "JUMP_EQ", "JUMP_NOT_EQ", "MACRO_TEST_JUMP_EQ", "MACRO_TEST_JUMP_NOT_EQ"]
+        for (const name of jumpOpcodeNames) {
+            const originalHandler = this.opcodes[opcodes[name]]
+            if (originalHandler) {
+                const vm = this
+                this.opcodes[opcodes[name]] = () => {
+                    const ipBefore = vm.read(registers.INSTRUCTION_POINTER)
+                    originalHandler()
+                    if (vm.selfModifyingBytecode) {
+                        const ipAfter = vm.read(registers.INSTRUCTION_POINTER)
+                        if (ipAfter < ipBefore) {
+                            vm.restoreBytecodeRange(ipAfter, ipBefore)
+                        }
+                    }
+                }
+            }
+        }
         this.refreshDispatchTable()
     }
 
@@ -682,6 +703,33 @@ class JSVM {
         this.antiDebugState = createAntiDebugState(key)
         this.runtimeOpcodeState = mixRuntimeOpcodeState(this.runtimeOpcodeState || this.runtimeDispatchSeed || 0x4f1bbcdc, this.antiDebugState.seed & 0xFF, 0, this.antiDebugState.seed)
         return this
+    }
+
+    enableSelfModifyingBytecode(key) {
+        this.selfModifyingBytecode = true
+        const normalizedKey = String(key ?? "")
+        let seed = 0x5bd1e995
+        for (let i = 0; i < normalizedKey.length; i++) {
+            seed = Math.imul((seed ^ normalizedKey.charCodeAt(i)) >>> 0, 0x45d9f3b) >>> 0
+        }
+        this.selfModifySeed = seed
+        return this
+    }
+
+    scrambleInstruction(startPos, endPos) {
+        if (!this.code || endPos <= startPos) return
+        const mask = ((this.selfModifySeed ^ Math.imul((startPos + 1) >>> 0, 0x165667b1)) >>> 0) & 0xFF
+        for (let i = startPos; i < endPos; i++) {
+            this.code[i] ^= (mask ^ ((i * 7) & 0xFF)) & 0xFF
+        }
+    }
+
+    restoreBytecodeRange(fromPos, toPos) {
+        if (!this.codeBackup || toPos <= fromPos) return
+        for (let i = fromPos; i < toPos; i++) {
+            const mask = ((this.selfModifySeed ^ Math.imul(i + 1, 0x9e3779b1)) >>> 0) & 0xFF
+            this.code[i] = this.codeBackup[i] ^ mask
+        }
     }
 
     runAntiDebugSweep(position) {
@@ -1059,22 +1107,27 @@ class JSVM {
         if (!format) {
             // assume buffer
             this.code = code
-            return
-        }
-        const buffer = Buffer.from(code, format)
-        if (envelope.encrypted) {
-            try {
-                this.code = zlib.inflateSync(buffer)
-            } catch (error) {
-                throw new Error("VM bytecode decryption failed")
-            }
-            return
-        }
-        if (buffer[0] === 0x78 && buffer[1] === 0x9c) {
-            log(new LogData("Decompressing zlib compressed bytecode", 'accent', true))
-            this.code = zlib.inflateSync(buffer)
         } else {
-            this.code = buffer
+            const buffer = Buffer.from(code, format)
+            if (envelope.encrypted) {
+                try {
+                    this.code = zlib.inflateSync(buffer)
+                } catch (error) {
+                    throw new Error("VM bytecode decryption failed")
+                }
+            } else if (buffer[0] === 0x78 && buffer[1] === 0x9c) {
+                log(new LogData("Decompressing zlib compressed bytecode", 'accent', true))
+                this.code = zlib.inflateSync(buffer)
+            } else {
+                this.code = buffer
+            }
+        }
+        if (this.selfModifyingBytecode && this.code) {
+            this.codeBackup = Buffer.alloc(this.code.length)
+            for (let i = 0; i < this.code.length; i++) {
+                const mask = ((this.selfModifySeed ^ Math.imul(i + 1, 0x9e3779b1)) >>> 0) & 0xFF
+                this.codeBackup[i] = this.code[i] ^ mask
+            }
         }
     }
 
@@ -1114,6 +1167,10 @@ class JSVM {
             } finally {
                 this.advanceRuntimeOpcodeState(opcode, position)
                 this.rotateProtectedRegisters()
+                if (this.selfModifyingBytecode && position !== undefined && this.code) {
+                    const currentIP = this.read(registers.INSTRUCTION_POINTER)
+                    this.scrambleInstruction(position, currentIP)
+                }
                 this.currentInstructionBase = null
             }
         }
@@ -1148,6 +1205,10 @@ class JSVM {
             } finally {
                 this.advanceRuntimeOpcodeState(opcode, position)
                 this.rotateProtectedRegisters()
+                if (this.selfModifyingBytecode && position !== undefined && this.code) {
+                    const currentIP = this.read(registers.INSTRUCTION_POINTER)
+                    this.scrambleInstruction(position, currentIP)
+                }
                 this.currentInstructionBase = null
             }
         }

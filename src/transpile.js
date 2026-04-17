@@ -37,6 +37,8 @@ const obfuscateOpcodes = require("./postTranspilation/obfuscateOpcodes");
 const {opNames} = require("./utils/constants");
 const {desugarStatementList} = require("./utils/desugar");
 const {shuffle} = require("./utils/random");
+const {insertOpaquePredicates} = require("./utils/opaquePredicates");
+const {applyControlFlowFlattening} = require("./utils/cff");
 
 const vmDist = fs.readFileSync(path.join(__dirname, './vm_dist.js'), 'utf-8');
 const encodings = ['base64']
@@ -647,7 +649,7 @@ function injectDeadCode(chunk) {
     decoySequence.forEach((opcode) => chunk.append(opcode));
 }
 
-function getJumpEncodingOffsets(opcodeName) {
+function getJumpEncodingOffsets(opcodeName, opcodeData) {
     switch (opcodeName) {
         case "JUMP_UNCONDITIONAL":
             return [0];
@@ -659,6 +661,15 @@ function getJumpEncodingOffsets(opcodeName) {
         case "MACRO_TEST_JUMP_EQ":
         case "MACRO_TEST_JUMP_NOT_EQ":
             return [3];
+        case "CFF_DISPATCH": {
+            if (!opcodeData || opcodeData.length < 5) return [];
+            const numEntries = opcodeData.readUInt32BE(1);
+            const offsets = [];
+            for (let i = 0; i < numEntries; i++) {
+                offsets.push(5 + i * 8 + 4);
+            }
+            return offsets;
+        }
         default:
             return [];
     }
@@ -677,7 +688,7 @@ function applyJumpTargetEncoding(chunk, seed) {
     let position = 0;
 
     for (const opcode of chunk.code) {
-        const offsets = getJumpEncodingOffsets(opcode.name);
+        const offsets = getJumpEncodingOffsets(opcode.name, opcode.data);
 
         if (offsets.length > 0) {
             opcode.data = Buffer.from(opcode.data);
@@ -707,6 +718,9 @@ async function transpile(code, options) {
     options.decoratorsMode = options.decoratorsMode ?? "legacy";
     options.deadCodeInjection = options.deadCodeInjection ?? true;
     options.memoryProtection = options.memoryProtection ?? true;
+    options.opaquePredicates = options.opaquePredicates ?? true;
+    options.controlFlowFlattening = options.controlFlowFlattening ?? true;
+    options.selfModifyingBytecode = options.selfModifyingBytecode ?? true;
     options.randomizeVMProfiles = options.randomizeVMProfiles ?? true;
     options.vmObfuscationTarget = options.vmObfuscationTarget ?? "node";
     options.transpiledObfuscationTarget = options.transpiledObfuscationTarget ?? "node";
@@ -786,6 +800,7 @@ async function transpile(code, options) {
         const bytecodeEncryptionKey = crypto.randomBytes(24).toString("base64");
         const memoryProtectionKey = crypto.randomBytes(16).toString("hex");
         const antiDebugKey = crypto.randomBytes(16).toString("hex");
+        const selfModifyKey = crypto.randomBytes(16).toString("hex");
         const usesArguments = usesIdentifier(node.body, "arguments");
         const usesThis = (() => {
             let found = false
@@ -814,8 +829,10 @@ async function transpile(code, options) {
         for (const vmProfile of vmProfileCandidates) {
             try {
                 const regToDep = {};
+                const cffStateRegister = options.controlFlowFlattening !== false ? vmProfile.registerCount - 1 : undefined;
                 const generator = new FunctionBytecodeGenerator(functionBody, undefined, {
-                    registerCount: vmProfile.registerCount
+                    registerCount: vmProfile.registerCount,
+                    cffStateRegister
                 });
 
                 for (const dependency of dependencies) {
@@ -870,12 +887,24 @@ async function transpile(code, options) {
                 });
 
                 generator.generate();
+                if (options.opaquePredicates !== false) {
+                    insertOpaquePredicates(generator.chunk, generator.reservedRegisters, vmProfile.registerCount);
+                }
                 applyMacroOpcodes(generator.chunk);
                 if (options.deadCodeInjection) {
                     injectDeadCode(generator.chunk);
                 }
+                let cffInitialStateId = 0;
+                if (options.controlFlowFlattening !== false) {
+                    const cffResult = applyControlFlowFlattening(generator.chunk, vmProfile.registerCount - 1);
+                    if (cffResult.chunk) {
+                        generator.chunk = cffResult.chunk;
+                    }
+                    cffInitialStateId = cffResult.initialStateId || 0;
+                }
 
                 generationResult = {
+                    cffInitialStateId,
                     aliasSetup,
                     generator,
                     params,
@@ -898,8 +927,15 @@ async function transpile(code, options) {
             throw lastRegisterError ?? new Error("Failed to allocate registers for randomized VM profile");
         }
 
-        const {aliasSetup, generator, params, regToDep, vmProfile} = generationResult;
+        const {aliasSetup, generator, params, regToDep, vmProfile, cffInitialStateId} = generationResult;
         chunks.push(generator.chunk)
+
+        const cffInit = options.controlFlowFlattening !== false
+            ? `VM.write(${vmProfile.registerCount - 1}, ${cffInitialStateId});`
+            : "";
+        const selfModifySetup = options.selfModifyingBytecode !== false
+            ? `VM.enableSelfModifyingBytecode('${selfModifyKey}');`
+            : "";
 
         const virtualizedFunction = functionWrapperTemplate
             .replace("%FN_PREFIX%", node.async ? "async " : "")
@@ -908,9 +944,11 @@ async function transpile(code, options) {
             .replace("%VM_PROFILE%", JSON.stringify(vmProfile))
             .replace("%ARG_SCRAMBLE_SETUP%", aliasSetup)
             .replace("%MEMORY_PROTECTION_SETUP%", options.memoryProtection ? `VM.enableMemoryProtection('${memoryProtectionKey}');` : "")
-            .replace("%ENCODING%", encoding)
+            .replace("%SELF_MODIFY_SETUP%", selfModifySetup)
             .replace("%BYTECODE_INTEGRITY_KEY%", integrityKey)
             .replace("%ANTI_DEBUG_SETUP%", `VM.enableAntiDebug('${antiDebugKey}');`)
+            .replace("%CFF_STATE_INIT%", cffInit)
+            .replace("%ENCODING%", encoding)
             .replace("%DEPENDENCIES%", JSON.stringify(regToDep).replace(/"/g, ""))
             .replace("%OUTPUT_REGISTER%", generator.outputRegister.toString())
             .replace("%RUNCMD%", node.async ? "await VM.runAsync()" : "VM.run()");

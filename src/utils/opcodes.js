@@ -333,6 +333,20 @@ const implOpcode = {
             this.registers[registers.INSTRUCTION_POINTER] = cur + offset + 2;
         }
     },
+    CFF_DISPATCH: function () {
+        const cur = this.read(registers.INSTRUCTION_POINTER);
+        const stateReg = this.readByte();
+        const currentState = this.read(stateReg);
+        const numEntries = this.readDWORD();
+        for (let i = 0; i < numEntries; i++) {
+            const entryState = this.readDWORD();
+            const entryOffset = this.readJumpTargetDWORD();
+            if (currentState === entryState) {
+                this.registers[registers.INSTRUCTION_POINTER] = cur + entryOffset - 1;
+                return;
+            }
+        }
+    },
     SET: function () {
         const dest = this.readByte(), src = this.readByte();
         this.write(dest, src);
