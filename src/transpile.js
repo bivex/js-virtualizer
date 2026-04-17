@@ -835,6 +835,39 @@ async function transpile(code, options) {
                     cffStateRegister
                 });
 
+                // Reserve scratch registers for opaque predicates to avoid clobbering live registers
+                let opaqueScratch = [];
+                if (options.opaquePredicates !== false) {
+                    const cffEnabled = options.controlFlowFlattening !== false;
+                    const cffStateReg = cffEnabled ? vmProfile.registerCount - 1 : undefined;
+                    // Pick 5 high-numbered registers, avoiding CFF state and any already reserved
+                    for (let r = vmProfile.registerCount - 1; r >= 0 && opaqueScratch.length < 5; r--) {
+                        if (r === cffStateReg) continue;
+                        if (generator.reservedRegisters.has(r)) continue;
+                        opaqueScratch.push(r);
+                    }
+                    // If not enough, scan from low end as fallback
+                    if (opaqueScratch.length < 5) {
+                        for (let r = 0; r < vmProfile.registerCount && opaqueScratch.length < 5; r++) {
+                            if (opaqueScratch.includes(r)) continue;
+                            if (generator.reservedRegisters.has(r)) continue;
+                            if (r === cffStateReg) continue;
+                            opaqueScratch.push(r);
+                        }
+                    }
+                    if (opaqueScratch.length === 5) {
+                        for (const reg of opaqueScratch) {
+                            generator.reservedRegisters.add(reg);
+                        }
+                        generator.opaqueScratch = opaqueScratch;
+                    } else {
+                        // Not enough free registers; skip opaque predicates
+                        generator.opaqueScratch = null;
+                    }
+                } else {
+                    generator.opaqueScratch = null;
+                }
+
                 for (const dependency of dependencies) {
                     const register = generator.randomRegister();
                     regToDep[register] = dependency;
@@ -887,8 +920,8 @@ async function transpile(code, options) {
                 });
 
                 generator.generate();
-                if (options.opaquePredicates !== false) {
-                    insertOpaquePredicates(generator.chunk, generator.reservedRegisters, vmProfile.registerCount);
+                if (options.opaquePredicates !== false && generator.opaqueScratch) {
+                    insertOpaquePredicates(generator.chunk, generator.opaqueScratch, vmProfile.registerCount);
                 }
                 applyMacroOpcodes(generator.chunk);
                 if (options.deadCodeInjection) {

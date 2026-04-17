@@ -99,29 +99,13 @@ function createJunkSequence(registers) {
     ];
 }
 
-function allocateScratchRegisters(reservedRegisters, registerCount, count) {
-    const available = [];
-    const lower = Math.max(3, registerCount - 36);
-    for (let i = registerCount - 1; i >= lower; i--) {
-        if (!reservedRegisters.has(i)) {
-            available.push(i);
-        }
-    }
-    if (available.length < count) return null;
-    return available.slice(0, count);
-}
+function insertOpaquePredicates(chunk, opaqueScratch, registerCount, options = {}) {
+    if (!opaqueScratch || opaqueScratch.length < 5) return chunk;
 
-function insertOpaquePredicates(chunk, reservedRegisters, registerCount, options = {}) {
     const density = options.density ?? randomInt(8, 13);
     const maxPredicates = options.maxPredicates ?? 15;
-    const scratch = allocateScratchRegisters(reservedRegisters, registerCount, 5);
-    if (!scratch) return chunk;
 
-    const [rA, rB, rC, rD, rE] = scratch;
-    // Mark scratch registers as reserved so they won't be reused by subsequent codegen
-    for (const reg of scratch) {
-        reservedRegisters.add(reg);
-    }
+    const [rA, rB, rC, rD, rE] = opaqueScratch;
     const junkRegs = [rD, rE, rA];
 
     const newCode = [];
@@ -143,7 +127,7 @@ function insertOpaquePredicates(chunk, reservedRegisters, registerCount, options
         if (!isSpecial && sinceLastInsert >= density && predicatesInserted < maxPredicates) {
             const genIdx = randomInt(0, PREDICATE_GENERATORS.length);
             const gen = PREDICATE_GENERATORS[genIdx];
-            const predicate = gen(rA, rB, rC);
+            const predicate = gen(rA, rB, rC, rD); // pass 4 registers; 3-arg gens ignore the fourth
 
             // TEST resultReg, resultReg
             const testOpcode = new Opcode("TEST", predicate.resultReg, predicate.resultReg);
