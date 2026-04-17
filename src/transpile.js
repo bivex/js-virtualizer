@@ -920,6 +920,12 @@ async function transpile(code, options) {
                 });
 
                 generator.generate();
+                // DEBUG: log bytecode for first virtualized function only
+                if (!global.__transpile_debug_done) {
+                    console.log("=== Bytecode for function: " + node.id.name + " ===");
+                    console.log(generator.chunk.toString());
+                    global.__transpile_debug_done = true;
+                }
                 if (options.opaquePredicates !== false && generator.opaqueScratch) {
                     insertOpaquePredicates(generator.chunk, generator.opaqueScratch, vmProfile.registerCount);
                 }
