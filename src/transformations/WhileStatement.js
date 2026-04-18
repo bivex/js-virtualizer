@@ -51,12 +51,12 @@ function resolveWhileStatement(node) {
         const {type, ip} = top.metadata
         switch (type) {
             case 'break': {
-                log(new LogData(`Detected break statement at ${ip}, jumping to end of for of loop`, 'accent', true))
+                log(new LogData(`Detected break statement at ${ip}, jumping to end of while loop`, 'accent', true))
                 top.modifyArgs(this.encodeDWORD(this.chunk.getCurrentIP() - ip))
                 break
             }
             case 'continue': {
-                log(new LogData(`Detected continue statement at ${ip}, jumping to start of for of loop`, 'accent', true))
+                log(new LogData(`Detected continue statement at ${ip}, jumping to start of while loop`, 'accent', true))
                 top.modifyArgs(this.encodeDWORD(continueGoto - ip))
                 break
             }
