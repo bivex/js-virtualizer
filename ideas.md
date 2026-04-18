@@ -67,10 +67,25 @@ await transpile(source, {
 
 ---
 
-## Medium Priority
-
-### 6. Environmental Locking
+### 6. Environmental Locking ✅
 Bind execution to `window.location.hostname`, browser fingerprint, or environment hash. Bytecode simply does not execute in a different context.
+
+**Implemented in:** `src/transpile.js` (hostname-based lock via `environmentLock` option), `src/templates/functionWrapper.template` (`%ENVIRONMENT_LOCK_SETUP%`).
+
+**Option API:**
+```js
+await transpile(source, {
+    environmentLock: {
+        hostname: "example.com"
+    }
+});
+```
+
+**How it works:** The transpiler injects a runtime check that compares `window.location.hostname` (browser) or `os.hostname()` (Node) against the expected value. If mismatched, the VM silently produces garbage results instead of crashing (anti-tampering).
+
+---
+
+## Medium Priority
 
 ### 7. Nested VM (Multi-Layer Virtualization)
 Virtualize the VM itself or critical opcode handlers through a second VM. Classic commercial protector approach.
@@ -94,4 +109,4 @@ The `run()` loop is relatively readable. Run it through control flow flattening 
 
 ---
 
-**Next priority:** Environmental Locking (item 6) — bind execution to hostname, fingerprint, or environment hash so bytecode refuses to run in a different context.
+**Next priority:** Nested VM (item 7) — virtualize the VM itself through a second VM layer for critical opcode handlers.
