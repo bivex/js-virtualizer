@@ -539,6 +539,9 @@ class JSVM {
         this.selfModifyingBytecode = false
         this.codeBackup = null
         this.selfModifySeed = 0
+        this.antiDump = false
+        this.antiDumpSeed = 0
+        this.antiDumpHighWaterMark = 0
         this.registers[registers.INSTRUCTION_POINTER] = 0
         this.registers[registers.UNDEFINED] = undefined
         this.registers[registers.VOID] = 0
@@ -733,6 +736,25 @@ class JSVM {
         for (let i = fromPos; i < toPos; i++) {
             const mask = ((this.selfModifySeed ^ Math.imul(i + 1, 0x9e3779b1)) >>> 0) & 0xFF
             this.code[i] = this.codeBackup[i] ^ mask
+        }
+    }
+
+    enableAntiDump(key) {
+        this.antiDump = true
+        const normalizedKey = String(key ?? "")
+        let seed = 0x6a09e667
+        for (let i = 0; i < normalizedKey.length; i++) {
+            seed = Math.imul((seed ^ normalizedKey.charCodeAt(i)) >>> 0, 0x1bbcd9b5) >>> 0
+        }
+        this.antiDumpSeed = seed
+        return this
+    }
+
+    scrubBytecodeRange(fromPos, toPos) {
+        if (!this.code || toPos <= fromPos) return
+        for (let i = fromPos; i < toPos; i++) {
+            const mask = ((this.antiDumpSeed ^ Math.imul(i + 1, 0x85ebca6b)) >>> 0) & 0xFF
+            this.code[i] = mask
         }
     }
 
@@ -1167,6 +1189,9 @@ class JSVM {
             if (opcode === undefined || opNames[opcode] === "END") {
                 // treat as end
                 log(`[IP = ${this.read(registers.INSTRUCTION_POINTER) - 1}]: End of execution`)
+                if (this.antiDump && position !== undefined && this.code) {
+                    this.scrubBytecodeRange(this.antiDumpHighWaterMark, position)
+                }
                 this.currentInstructionBase = null
                 break
             }
@@ -1193,6 +1218,14 @@ class JSVM {
                     const currentIP = this.read(registers.INSTRUCTION_POINTER)
                     this.scrambleInstruction(position, currentIP)
                 }
+                if (this.antiDump && position !== undefined && this.code) {
+                    const currentIP = this.read(registers.INSTRUCTION_POINTER)
+                    const scrubEnd = Math.min(currentIP, this.code.length)
+                    this.scrubBytecodeRange(this.antiDumpHighWaterMark, scrubEnd)
+                    if (scrubEnd > this.antiDumpHighWaterMark) {
+                        this.antiDumpHighWaterMark = scrubEnd
+                    }
+                }
                 this.currentInstructionBase = null
             }
         }
@@ -1205,6 +1238,9 @@ class JSVM {
             if (opcode === undefined || opNames[opcode] === "END") {
                 // treat as end
                 log(`[IP = ${this.read(registers.INSTRUCTION_POINTER) - 1}]: End of execution`)
+                if (this.antiDump && position !== undefined && this.code) {
+                    this.scrubBytecodeRange(this.antiDumpHighWaterMark, position)
+                }
                 this.currentInstructionBase = null
                 break
             }
@@ -1230,6 +1266,14 @@ class JSVM {
                 if (this.selfModifyingBytecode && position !== undefined && this.code) {
                     const currentIP = this.read(registers.INSTRUCTION_POINTER)
                     this.scrambleInstruction(position, currentIP)
+                }
+                if (this.antiDump && position !== undefined && this.code) {
+                    const currentIP = this.read(registers.INSTRUCTION_POINTER)
+                    const scrubEnd = Math.min(currentIP, this.code.length)
+                    this.scrubBytecodeRange(this.antiDumpHighWaterMark, scrubEnd)
+                    if (scrubEnd > this.antiDumpHighWaterMark) {
+                        this.antiDumpHighWaterMark = scrubEnd
+                    }
                 }
                 this.currentInstructionBase = null
             }

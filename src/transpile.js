@@ -759,6 +759,7 @@ async function transpile(code, options) {
     options.selfModifyingBytecode = options.selfModifyingBytecode ?? true;
     options.randomizeVMProfiles = options.randomizeVMProfiles ?? true;
     options.polymorphic = options.polymorphic ?? true;
+    options.antiDump = options.antiDump ?? true;
     options.vmObfuscationTarget = options.vmObfuscationTarget ?? "node";
     options.transpiledObfuscationTarget = options.transpiledObfuscationTarget ?? "node";
     options.fileName = options.fileName ?? crypto.randomBytes(8).toString('hex')
@@ -838,6 +839,7 @@ async function transpile(code, options) {
         const memoryProtectionKey = crypto.randomBytes(16).toString("hex");
         const antiDebugKey = crypto.randomBytes(16).toString("hex");
         const selfModifyKey = crypto.randomBytes(16).toString("hex");
+        const antiDumpKey = crypto.randomBytes(16).toString("hex");
         // Polymorphic configuration: derive endianness from integrityKey
         const polyEndian = options.polymorphic
             ? (parseInt(integrityKey.slice(0, 8), 16) & 1 ? "LE" : "BE")
@@ -1033,6 +1035,9 @@ async function transpile(code, options) {
         const selfModifySetup = options.selfModifyingBytecode !== false
             ? `VM.enableSelfModifyingBytecode('${selfModifyKey}');`
             : "";
+        const antiDumpSetup = options.antiDump !== false
+            ? `VM.enableAntiDump('${antiDumpKey}');`
+            : "";
 
         const virtualizedFunction = functionWrapperTemplate
             .replace("%FN_PREFIX%", node.async ? "async " : "")
@@ -1042,6 +1047,7 @@ async function transpile(code, options) {
             .replace("%ARG_SCRAMBLE_SETUP%", aliasSetup)
             .replace("%MEMORY_PROTECTION_SETUP%", options.memoryProtection ? `VM.enableMemoryProtection('${memoryProtectionKey}');` : "")
             .replace("%SELF_MODIFY_SETUP%", selfModifySetup)
+            .replace("%ANTI_DUMP_SETUP%", antiDumpSetup)
             .replace("%BYTECODE_INTEGRITY_KEY%", integrityKey)
             .replace("%ANTI_DEBUG_SETUP%", `VM.enableAntiDebug('${antiDebugKey}');`)
             .replace("%CFF_STATE_INIT%", cffInit)

@@ -44,10 +44,30 @@ await transpile(source, {
 
 ---
 
-## Medium Priority
+## Completed
 
-### 5. Anti-Dump / Memory Scrubbing After Decryption
+### 5. Anti-Dump / Memory Scrubbing After Decryption ✅
 Erase previous bytecode chunks after decryption. A memory dump at pause time yields incomplete/corrupted bytecode.
+
+**Implemented in:** `src/vm_dev.js` + `src/vm_dist.js` (`enableAntiDump`, `scrubBytecodeRange`, high-water-mark tracking), `src/transpile.js` (`antiDump` option, key generation), `src/templates/functionWrapper.template` (`%ANTI_DUMP_SETUP%`), `src/utils/opcodes.js` (fork propagation).
+
+**How it works:**
+- Each executed instruction's bytecode is overwritten with seed-derived garbage (irreversible)
+- A high-water mark tracks the furthest point reached — only scrubbing forward, never re-scrubbing already-scrubbed bytes
+- On backward jumps (loops), `restoreBytecodeRange` restores code from backup, then re-execution scrubs it again
+- Fork (nested VM calls) inherits `antiDump` + `antiDumpSeed` and starts with a fresh high-water mark
+- After VM finishes, the entire bytecode buffer is scrubbed — a memory dump yields only garbage
+
+**Option API:**
+```js
+await transpile(source, {
+    antiDump: true,  // default: true
+});
+```
+
+---
+
+## Medium Priority
 
 ### 6. Environmental Locking
 Bind execution to `window.location.hostname`, browser fingerprint, or environment hash. Bytecode simply does not execute in a different context.
@@ -74,4 +94,4 @@ The `run()` loop is relatively readable. Run it through control flow flattening 
 
 ---
 
-**Next priority:** Anti-Dump / Memory Scrubbing (item 5) is the next high-impact feature. Combined with polymorphism, memory scrubbing would mean that even a live memory dump yields incomplete or corrupted bytecode — reversers get neither a static ISA nor a complete dump.
+**Next priority:** Environmental Locking (item 6) — bind execution to hostname, fingerprint, or environment hash so bytecode refuses to run in a different context.

@@ -156,6 +156,8 @@ const implOpcode = {
             fork.selfModifyingBytecode = vm.selfModifyingBytecode;
             fork.codeBackup = vm.codeBackup;
             fork.selfModifySeed = vm.selfModifySeed;
+            fork.antiDump = vm.antiDump;
+            fork.antiDumpSeed = vm.antiDumpSeed;
             bindCaptureReferences(fork);
             const restIndex = argOrder.length - 1;
             if (hasDynamicThis) {
@@ -198,6 +200,8 @@ const implOpcode = {
             fork.selfModifyingBytecode = vm.selfModifyingBytecode;
             fork.codeBackup = vm.codeBackup;
             fork.selfModifySeed = vm.selfModifySeed;
+            fork.antiDump = vm.antiDump;
+            fork.antiDumpSeed = vm.antiDumpSeed;
             bindCaptureReferences(fork);
             const restIndex = argOrder.length - 1;
             if (hasDynamicThis) {
