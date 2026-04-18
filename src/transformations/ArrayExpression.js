@@ -21,21 +21,12 @@ function resolveArrayExpression(node) {
     const {elements} = node
 
     const arrayRegister = this.getAvailableTempLoad()
-    const counterRegister = this.getAvailableTempLoad()
-    const oneRegister = this.getAvailableTempLoad()
-
     this.chunk.append(new Opcode('SETUP_ARRAY', arrayRegister, this.encodeDWORD(elements.length)));
-    this.chunk.append(new Opcode('LOAD_DWORD', counterRegister, this.encodeDWORD(0)));
-    this.chunk.append(new Opcode('LOAD_DWORD', oneRegister, this.encodeDWORD(1)));
-
-    elements.forEach((element) => {
+    this.buildArrayFromItems(elements, (element, counter, idx) => {
         const elementRegister = this.resolveExpression(element).outputRegister
-        this.chunk.append(new Opcode('SET_INDEX', arrayRegister, counterRegister, elementRegister));
+        this.chunk.append(new Opcode('SET_INDEX', arrayRegister, counter, elementRegister))
         if (needsCleanup(element)) this.freeTempLoad(elementRegister)
-        this.chunk.append(new Opcode('ADD', counterRegister, counterRegister, oneRegister))
     })
-    this.freeTempLoad(counterRegister)
-    this.freeTempLoad(oneRegister)
     return arrayRegister
 }
 
