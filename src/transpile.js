@@ -21,15 +21,14 @@ const asyncGeneratorFunctionsPlugin = require("@babel/plugin-transform-async-gen
 const regeneratorPlugin = require("@babel/plugin-transform-regenerator");
 const eslintScope = require("eslint-scope");
 const path = require("node:path");
-const functionWrapperTemplate = fs.readFileSync(path.join(__dirname, "./templates/functionWrapper.template"), "utf-8");
-const requireTemplate = fs.readFileSync(path.join(__dirname, "./templates/requireTemplate.template"), "utf-8");
+const fs = require("node:fs");
 const crypto = require("crypto");
+const zlib = require("node:zlib");
+
 const {DEFAULT_REGISTER_COUNT, FunctionBytecodeGenerator} = require("./utils/BytecodeGenerator");
 const {Opcode, encodeDWORD, encodeString} = require("./utils/assembler");
 const escodegen = require("escodegen");
 const {log, LogData} = require("./utils/log");
-const zlib = require("node:zlib");
-const fs = require("node:fs");
 const JSVM = require("./vm_dev");
 const obfuscateCode = require("./postTranspilation/obfuscateCode");
 const obfuscateOpcodes = require("./postTranspilation/obfuscateOpcodes");
@@ -38,6 +37,9 @@ const {desugarStatementList} = require("./utils/desugar");
 const {shuffle} = require("./utils/random");
 const {insertOpaquePredicates} = require("./utils/opaquePredicates");
 const {applyControlFlowFlattening} = require("./utils/cff");
+
+const functionWrapperTemplate = fs.readFileSync(path.join(__dirname, "./templates/functionWrapper.template"), "utf-8");
+const requireTemplate = fs.readFileSync(path.join(__dirname, "./templates/requireTemplate.template"), "utf-8");
 
 const vmDist = fs.readFileSync(path.join(__dirname, './vm_dist.js'), 'utf-8');
 const encodings = ['base64']
