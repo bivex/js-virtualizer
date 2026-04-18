@@ -143,7 +143,7 @@ const implOpcode = {
         function runSync(thisArg, args) {
             const fork = new vm.constructor(vm.getProfile());
             fork.setBytecodeIntegrityKey(vm.bytecodeIntegrityKey);
-            fork.code = vm.code;
+            fork.code = vm.selfModifyingBytecode ? Buffer.from(vm.code) : vm.code;
             fork.registers = vm.captureRegisterSnapshot();
             fork.regstack = [];
             fork.registerRefs = new Map(vm.registerRefs);
@@ -153,6 +153,9 @@ const implOpcode = {
             fork.runtimeOpcodeState = vm.runtimeOpcodeState;
             fork.adoptMemoryProtectionState(vm.memoryProtectionState);
             fork.adoptAntiDebugState(vm.antiDebugState);
+            fork.selfModifyingBytecode = vm.selfModifyingBytecode;
+            fork.codeBackup = vm.codeBackup;
+            fork.selfModifySeed = vm.selfModifySeed;
             bindCaptureReferences(fork);
             const restIndex = argOrder.length - 1;
             if (hasDynamicThis) {
@@ -170,6 +173,9 @@ const implOpcode = {
                 fork.write(argArrayMapper[i], args[sourceIndex]);
             }
             fork.registers[registers.INSTRUCTION_POINTER] = cur + fnOffset - 1;
+            if (vm.selfModifyingBytecode && vm.codeBackup) {
+                fork.restoreBytecodeRange(0, fork.code.length);
+            }
             fork.run()
             const res = fork.read(returnDataStore);
             log(`Callback result: ${res}`)
@@ -179,7 +185,7 @@ const implOpcode = {
         async function runAsync(thisArg, args) {
             const fork = new vm.constructor(vm.getProfile());
             fork.setBytecodeIntegrityKey(vm.bytecodeIntegrityKey);
-            fork.code = vm.code;
+            fork.code = vm.selfModifyingBytecode ? Buffer.from(vm.code) : vm.code;
             fork.registers = vm.captureRegisterSnapshot();
             fork.regstack = [];
             fork.registerRefs = new Map(vm.registerRefs);
@@ -189,6 +195,9 @@ const implOpcode = {
             fork.runtimeOpcodeState = vm.runtimeOpcodeState;
             fork.adoptMemoryProtectionState(vm.memoryProtectionState);
             fork.adoptAntiDebugState(vm.antiDebugState);
+            fork.selfModifyingBytecode = vm.selfModifyingBytecode;
+            fork.codeBackup = vm.codeBackup;
+            fork.selfModifySeed = vm.selfModifySeed;
             bindCaptureReferences(fork);
             const restIndex = argOrder.length - 1;
             if (hasDynamicThis) {
@@ -206,6 +215,9 @@ const implOpcode = {
                 fork.write(argArrayMapper[i], args[sourceIndex]);
             }
             fork.registers[registers.INSTRUCTION_POINTER] = cur + fnOffset - 1;
+            if (vm.selfModifyingBytecode && vm.codeBackup) {
+                fork.restoreBytecodeRange(0, fork.code.length);
+            }
             await fork.runAsync()
             const res = fork.read(returnDataStore);
             log(`Async callback result: ${res}`)

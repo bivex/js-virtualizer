@@ -176,6 +176,21 @@ function applyControlFlowFlattening(chunk, cffStateReg) {
         bpos += opcodes[i].toBytes().length;
     }
 
+    // Verify all jump targets resolve to block boundaries
+    const blockByteOffsets = new Set(blocks.map(b => b.byteOffset));
+    for (let i = 0; i < opcodes.length; i++) {
+        const opcode = opcodes[i];
+        const offsetPositions = getOffsetPositionsInOpcode(opcode);
+        if (offsetPositions.length > 0) {
+            const cur = originalByteOffsets.get(i) + 1;
+            for (const pos of offsetPositions) {
+                const offset = readOffsetFromData(opcode.data, pos);
+                const targetByte = cur + offset - 1;
+                if (!blockByteOffsets.has(targetByte)) return { initialStateId: 0 };
+            }
+        }
+    }
+
     // Build a reverse map: original byte offset → block index
     const byteOffsetToBlock = new Map();
     for (const block of blocks) {

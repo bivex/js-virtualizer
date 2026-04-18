@@ -213,7 +213,9 @@ console.log(demo(true));
 `, {
             fileName: "obfuscation-macros.js",
             writeOutput: false,
-            passes: ["RemoveUnused"]
+            passes: ["RemoveUnused"],
+            controlFlowFlattening: false,
+            opaquePredicates: false,
         });
 
         const opNames = extractVmOpNames(result.vm);
