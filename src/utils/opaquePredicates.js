@@ -103,15 +103,25 @@ function computeTargetByte(cur, offset, formula) {
     return cur + offset - 1; // default: cur + offset - 1
 }
 
-function readDWORD(data, pos) {
+function readDWORD(data, pos, endian = "BE") {
+    if (endian === "LE") {
+        return data[pos] | (data[pos + 1] << 8) | (data[pos + 2] << 16) | (data[pos + 3] << 24);
+    }
     return (data[pos] << 24) | (data[pos + 1] << 16) | (data[pos + 2] << 8) | data[pos + 3];
 }
 
-function writeDWORD(data, pos, value) {
-    data[pos] = (value >> 24) & 0xFF;
-    data[pos + 1] = (value >> 16) & 0xFF;
-    data[pos + 2] = (value >> 8) & 0xFF;
-    data[pos + 3] = value & 0xFF;
+function writeDWORD(data, pos, value, endian = "BE") {
+    if (endian === "LE") {
+        data[pos] = value & 0xFF;
+        data[pos + 1] = (value >> 8) & 0xFF;
+        data[pos + 2] = (value >> 16) & 0xFF;
+        data[pos + 3] = (value >> 24) & 0xFF;
+    } else {
+        data[pos] = (value >> 24) & 0xFF;
+        data[pos + 1] = (value >> 16) & 0xFF;
+        data[pos + 2] = (value >> 8) & 0xFF;
+        data[pos + 3] = value & 0xFF;
+    }
 }
 
 function insertOpaquePredicates(chunk, opaqueScratch, registerCount, options = {}) {
@@ -119,6 +129,7 @@ function insertOpaquePredicates(chunk, opaqueScratch, registerCount, options = {
 
     const density = options.density ?? randomInt(8, 13);
     const maxPredicates = options.maxPredicates ?? 15;
+    const polyEndian = options.polyEndian || "BE";
 
     const code = chunk.code;
     const [rA, rB, rC, rD, rE] = opaqueScratch;
@@ -235,7 +246,7 @@ function insertOpaquePredicates(chunk, opaqueScratch, registerCount, options = {
         const formula = info.formula;
 
         for (const pos of info.positions) {
-            const oldOffset = readDWORD(data, pos);
+            const oldOffset = readDWORD(data, pos, polyEndian);
             const oldCur = opcode._origByteOffset + 1;
             const oldTargetByte = computeTargetByte(oldCur, oldOffset, formula);
 
@@ -248,7 +259,7 @@ function insertOpaquePredicates(chunk, opaqueScratch, registerCount, options = {
             } else {
                 newOffset = newTargetByte - newCur + 1;
             }
-            writeDWORD(data, pos, newOffset);
+            writeDWORD(data, pos, newOffset, polyEndian);
         }
 
         delete opcode._origByteOffset;

@@ -205,7 +205,8 @@ const DEFAULT_VM_PROFILE = Object.freeze({
     aliasJitter: 1,
     decoyCount: Math.max(8, Math.ceil(opNames.length / 4)),
     decoyStride: 3,
-    runtimeOpcodeDerivation: "hybrid"
+    runtimeOpcodeDerivation: "hybrid",
+    polyEndian: "BE"
 });
 
 function clampInteger(value, min, max, fallback) {
@@ -233,6 +234,9 @@ function normalizeVMProfile(profile = {}) {
     normalized.runtimeOpcodeDerivation = RUNTIME_OPCODE_DERIVATION_MODES.has(profile.runtimeOpcodeDerivation)
         ? profile.runtimeOpcodeDerivation
         : DEFAULT_VM_PROFILE.runtimeOpcodeDerivation;
+    normalized.polyEndian = (profile.polyEndian === "LE" || profile.polyEndian === "BE")
+        ? profile.polyEndian
+        : DEFAULT_VM_PROFILE.polyEndian || "BE";
     return normalized;
 }
 
@@ -1045,18 +1049,36 @@ class JSVM {
 
     // js integers are 32-bit signed
     readDWORD() {
-        return this.readByte() << 24 | this.readByte() << 16 | this.readByte() << 8 | this.readByte()
+        const b1 = this.readByte();
+        const b2 = this.readByte();
+        const b3 = this.readByte();
+        const b4 = this.readByte();
+        if (this.vmProfile && this.vmProfile.polyEndian === "LE") {
+            return b1 | (b2 << 8) | (b3 << 16) | (b4 << 24);
+        }
+        return b1 << 24 | b2 << 16 | b3 << 8 | b4;
     }
 
     readJumpTargetDWORD() {
         const position = this.read(registers.INSTRUCTION_POINTER)
-        const bytes = Buffer.from([this.readByte(), this.readByte(), this.readByte(), this.readByte()])
+        const bytes = Buffer.from([
+            this.readByte(),
+            this.readByte(),
+            this.readByte(),
+            this.readByte()
+        ])
 
         if (!this.jumpTargetEncodingEnabled || !this.jumpTargetSeed) {
-            return bytes.readInt32BE(0)
+            // Use endianness from profile
+            return this.vmProfile.polyEndian === "LE"
+                ? bytes.readInt32LE(0)
+                : bytes.readInt32BE(0)
         }
 
-        return transformJumpTargetBytes(bytes, position, this.jumpTargetSeed).readInt32BE(0)
+        const transformed = transformJumpTargetBytes(bytes, position, this.jumpTargetSeed)
+        return this.vmProfile.polyEndian === "LE"
+            ? transformed.readInt32LE(0)
+            : transformed.readInt32BE(0)
     }
 
     // taken from: https://github.com/jwillbold/rusty-jsyc/blob/master/vm/vm.js#L403

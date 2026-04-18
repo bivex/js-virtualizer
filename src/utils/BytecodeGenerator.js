@@ -59,6 +59,8 @@ class FunctionBytecodeGenerator {
         if (options.cffStateRegister !== undefined) {
             this.reservedRegisters.add(options.cffStateRegister);
         }
+        this.registerScrambleMap = options.registerScrambleMap || null;
+        this.reverseScrambleMap = options.reverseScrambleMap || null;
         this.outputRegister = this.randomRegister();
 
         // for arithmetics and loading values
@@ -201,6 +203,13 @@ class FunctionBytecodeGenerator {
             log(new LogData(`Prohibiting dropping of required register ${register}`, 'warn'))
             return
         }
+        if (this.reverseScrambleMap) {
+            const logicalIdx = this.reverseScrambleMap.get(register);
+            if (logicalIdx !== undefined) {
+                this.reservedRegisters.delete(logicalIdx);
+                return;
+            }
+        }
         this.reservedRegisters.delete(register);
     }
 
@@ -263,6 +272,11 @@ class FunctionBytecodeGenerator {
             register = crypto.randomInt(registerNames.length, this.registerCount);
         }
         this.reservedRegisters.add(register);
+
+        if (this.registerScrambleMap) {
+            const scrambled = this.registerScrambleMap.get(register);
+            if (scrambled !== undefined) return scrambled;
+        }
         return register;
     }
 

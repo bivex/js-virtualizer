@@ -180,12 +180,29 @@ function encodeFloat(float) {
     return data;
 }
 
+let _dwordEndian = "BE";
+
+function setEndian(endian) {
+    _dwordEndian = endian === "LE" ? "LE" : "BE";
+}
+
+function getEndian() {
+    return _dwordEndian;
+}
+
 function encodeDWORD(dword) {
     const buffer = Buffer.alloc(4);
-    buffer[0] = (dword >> 24) & 0xFF;
-    buffer[1] = (dword >> 16) & 0xFF;
-    buffer[2] = (dword >> 8) & 0xFF;
-    buffer[3] = dword & 0xFF;
+    if (_dwordEndian === "LE") {
+        buffer[0] = dword & 0xFF;
+        buffer[1] = (dword >> 8) & 0xFF;
+        buffer[2] = (dword >> 16) & 0xFF;
+        buffer[3] = (dword >> 24) & 0xFF;
+    } else {
+        buffer[0] = (dword >> 24) & 0xFF;
+        buffer[1] = (dword >> 16) & 0xFF;
+        buffer[2] = (dword >> 8) & 0xFF;
+        buffer[3] = dword & 0xFF;
+    }
     return buffer;
 }
 
@@ -251,5 +268,6 @@ function encodeArrayRegisters(array) {
 }
 
 module.exports = {
-    Opcode, VMChunk, BytecodeValue, encodeString, encodeFloat, encodeDWORD, encodeArray, encodeArrayRegisters
+    Opcode, VMChunk, BytecodeValue, encodeString, encodeFloat, encodeDWORD, encodeArray, encodeArrayRegisters,
+    setEndian, getEndian
 }

@@ -156,7 +156,8 @@ const UNSAFE_OPCODES = new Set([
     "VFUNC_RETURN",
 ]);
 
-function applyControlFlowFlattening(chunk, cffStateReg) {
+function applyControlFlowFlattening(chunk, cffStateReg, options = {}) {
+    const polyEndian = options.polyEndian || "BE";
     const opcodes = chunk.code;
     if (opcodes.length < 4) return { initialStateId: 0 };
 
@@ -398,18 +399,21 @@ function applyControlFlowFlattening(chunk, cffStateReg) {
     // Build CFF_DISPATCH opcode data
     const dispatchData = Buffer.alloc(1 + 4 + numEntries * 8);
     dispatchData[0] = cffStateReg;
-    dispatchData.writeUInt32BE(numEntries, 1);
+
+    const writeU32 = (polyEndian === "LE") ? "writeUInt32LE" : "writeUInt32BE";
+    const writeI32 = (polyEndian === "LE") ? "writeInt32LE" : "writeInt32BE";
+
+    dispatchData[writeU32](numEntries, 1);
 
     for (let i = 0; i < numEntries; i++) {
         const blockIdx = blockIndices[i];
         const stateId = stateIds.get(blockIdx);
         const blockOffset = shuffledBlockOffsets.get(blockIdx);
-        // Offset is relative to cur = dispatchByteOffset + 1 (IP after CFF_DISPATCH opcode byte)
         const cur = dispatchByteOffset + 1;
         const offset = blockOffset - cur + 1;
         const entryBase = 5 + i * 8;
-        dispatchData.writeUInt32BE(stateId, entryBase);
-        dispatchData.writeInt32BE(offset, entryBase + 4);
+        dispatchData[writeU32](stateId, entryBase);
+        dispatchData[writeI32](offset, entryBase + 4);
     }
 
     // Now patch all "JUMP_UNCONDITIONAL dispatch" instructions to point to the dispatch opcode

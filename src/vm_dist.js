@@ -241,7 +241,8 @@ const DEFAULT_VM_PROFILE = Object.freeze({
     aliasJitter: 1,
     decoyCount: 18,
     decoyStride: 3,
-    runtimeOpcodeDerivation: "hybrid"
+    runtimeOpcodeDerivation: "hybrid",
+    polyEndian: "BE"
 });
 
 function clampInteger(value, min, max, fallback) {
@@ -269,6 +270,9 @@ function normalizeVMProfile(profile = {}) {
     normalized.runtimeOpcodeDerivation = RUNTIME_OPCODE_DERIVATION_MODES.has(profile.runtimeOpcodeDerivation)
         ? profile.runtimeOpcodeDerivation
         : DEFAULT_VM_PROFILE.runtimeOpcodeDerivation;
+    normalized.polyEndian = (profile.polyEndian === "LE" || profile.polyEndian === "BE")
+        ? profile.polyEndian
+        : DEFAULT_VM_PROFILE.polyEndian || "BE";
     return normalized;
 }
 
@@ -1569,7 +1573,14 @@ class JSVM {
     }
 
     readDWORD() {
-        return this.readByte() << 24 | this.readByte() << 16 | this.readByte() << 8 | this.readByte()
+        const b1 = this.readByte();
+        const b2 = this.readByte();
+        const b3 = this.readByte();
+        const b4 = this.readByte();
+        if (this.vmProfile && this.vmProfile.polyEndian === "LE") {
+            return b1 | (b2 << 8) | (b3 << 16) | (b4 << 24);
+        }
+        return b1 << 24 | b2 << 16 | b3 << 8 | b4;
     }
 
     readInstructionDecodedByteArray(length) {
@@ -1585,11 +1596,16 @@ class JSVM {
         const bytes = this.readInstructionDecodedByteArray(4);
 
         if (!this.jumpTargetEncodingEnabled || !this.jumpTargetSeed) {
-            return ((bytes[0] << 24) | (bytes[1] << 16) | (bytes[2] << 8) | bytes[3]);
+            // Use endianness from profile
+            return this.vmProfile && this.vmProfile.polyEndian === "LE"
+                ? (bytes[0] | (bytes[1] << 8) | (bytes[2] << 16) | (bytes[3] << 24))
+                : ((bytes[0] << 24) | (bytes[1] << 16) | (bytes[2] << 8) | bytes[3]);
         }
 
         const decoded = transformJumpTargetBytes(bytes, position, this.jumpTargetSeed);
-        return ((decoded[0] << 24) | (decoded[1] << 16) | (decoded[2] << 8) | decoded[3]);
+        return this.vmProfile && this.vmProfile.polyEndian === "LE"
+            ? (decoded[0] | (decoded[1] << 8) | (decoded[2] << 16) | (decoded[3] << 24))
+            : ((decoded[0] << 24) | (decoded[1] << 16) | (decoded[2] << 8) | decoded[3]);
     }
 
     readFloat() {

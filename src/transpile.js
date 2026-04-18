@@ -26,7 +26,7 @@ const functionWrapperTemplate = readFileSync(path.join(__dirname, "./templates/f
 const requireTemplate = readFileSync(path.join(__dirname, "./templates/requireTemplate.template"), "utf-8");
 const crypto = require("crypto");
 const {DEFAULT_REGISTER_COUNT, FunctionBytecodeGenerator} = require("./utils/BytecodeGenerator");
-const {Opcode, encodeDWORD, encodeString} = require("./utils/assembler");
+const {Opcode, encodeDWORD, encodeString, setEndian, getEndian} = require("./utils/assembler");
 const escodegen = require("escodegen");
 const {log, LogData} = require("./utils/log");
 const zlib = require("node:zlib");
@@ -56,7 +56,8 @@ const DEFAULT_VM_PROFILE = Object.freeze({
     aliasJitter: 1,
     decoyCount: Math.max(8, Math.ceil(opNames.length / 4)),
     decoyStride: 3,
-    runtimeOpcodeDerivation: "hybrid"
+    runtimeOpcodeDerivation: "hybrid",
+    polyEndian: "BE"
 });
 
 if (!fs.existsSync(path.join(__dirname, '../output'))) fs.mkdirSync(path.join(__dirname, '../output'))
@@ -112,7 +113,40 @@ function normalizeVMProfile(profile = {}) {
     normalized.runtimeOpcodeDerivation = OPCODE_DERIVATION_MODES.includes(profile.runtimeOpcodeDerivation)
         ? profile.runtimeOpcodeDerivation
         : DEFAULT_VM_PROFILE.runtimeOpcodeDerivation;
+    normalized.polyEndian = (profile.polyEndian === "LE" || profile.polyEndian === "BE")
+        ? profile.polyEndian
+        : DEFAULT_VM_PROFILE.polyEndian;
     return normalized;
+}
+
+function seededRNG(seedStr) {
+    // Simple mul32hash-based RNG seeded from hex string
+    let state = 0x12345678;
+    for (let i = 0; i < seedStr.length; i++) {
+        state = (state * 1664525 + seedStr.charCodeAt(i)) & 0xFFFFFFFF;
+    }
+    return function() {
+        state = (state * 1664525 + 1013904223) & 0xFFFFFFFF;
+        return state >>> 0;
+    };
+}
+
+function buildRegisterScramble(registerCount, cffEnabled, seed) {
+    const start = 3;
+    const end = cffEnabled ? registerCount - 1 : registerCount;
+    const indices = Array.from({ length: end - start }, (_, i) => start + i);
+    const rng = seededRNG(seed);
+    for (let i = indices.length - 1; i > 0; i--) {
+        const j = rng() % (i + 1);
+        [indices[i], indices[j]] = [indices[j], indices[i]];
+    }
+    const scrambleMap = new Map();
+    const reverseMap = new Map();
+    for (let i = 0; i < end - start; i++) {
+        scrambleMap.set(start + i, indices[i]);
+        reverseMap.set(indices[i], start + i);
+    }
+    return { scrambleMap, reverseMap };
 }
 
 function estimateVmRegisterDemand(functionBody, dependencies, params) {
@@ -649,7 +683,7 @@ function injectDeadCode(chunk) {
     decoySequence.forEach((opcode) => chunk.append(opcode));
 }
 
-function getJumpEncodingOffsets(opcodeName, opcodeData) {
+function getJumpEncodingOffsets(opcodeName, opcodeData, polyEndian = "BE") {
     switch (opcodeName) {
         case "JUMP_UNCONDITIONAL":
             return [0];
@@ -663,7 +697,9 @@ function getJumpEncodingOffsets(opcodeName, opcodeData) {
             return [3];
         case "CFF_DISPATCH": {
             if (!opcodeData || opcodeData.length < 5) return [];
-            const numEntries = opcodeData.readUInt32BE(1);
+            const numEntries = polyEndian === "LE"
+                ? opcodeData.readUInt32LE(1)
+                : opcodeData.readUInt32BE(1);
             const offsets = [];
             for (let i = 0; i < numEntries; i++) {
                 offsets.push(5 + i * 8 + 4);
@@ -684,11 +720,11 @@ function applyStatefulOpcodeEncoding(chunk, seed) {
     }
 }
 
-function applyJumpTargetEncoding(chunk, seed) {
+function applyJumpTargetEncoding(chunk, seed, polyEndian = "BE") {
     let position = 0;
 
     for (const opcode of chunk.code) {
-        const offsets = getJumpEncodingOffsets(opcode.name, opcode.data);
+        const offsets = getJumpEncodingOffsets(opcode.name, opcode.data, polyEndian);
 
         if (offsets.length > 0) {
             opcode.data = Buffer.from(opcode.data);
@@ -722,6 +758,7 @@ async function transpile(code, options) {
     options.controlFlowFlattening = options.controlFlowFlattening ?? true;
     options.selfModifyingBytecode = options.selfModifyingBytecode ?? true;
     options.randomizeVMProfiles = options.randomizeVMProfiles ?? true;
+    options.polymorphic = options.polymorphic ?? true;
     options.vmObfuscationTarget = options.vmObfuscationTarget ?? "node";
     options.transpiledObfuscationTarget = options.transpiledObfuscationTarget ?? "node";
     options.fileName = options.fileName ?? crypto.randomBytes(8).toString('hex')
@@ -801,6 +838,12 @@ async function transpile(code, options) {
         const memoryProtectionKey = crypto.randomBytes(16).toString("hex");
         const antiDebugKey = crypto.randomBytes(16).toString("hex");
         const selfModifyKey = crypto.randomBytes(16).toString("hex");
+        // Polymorphic configuration: derive endianness from integrityKey and set assembler
+        const polyEndian = options.polymorphic
+            ? (parseInt(integrityKey.slice(0, 8), 16) & 1 ? "LE" : "BE")
+            : "BE";
+        setEndian(polyEndian);
+        try {
         const usesArguments = usesIdentifier(node.body, "arguments");
         const usesThis = (() => {
             let found = false
@@ -830,9 +873,19 @@ async function transpile(code, options) {
             try {
                 const regToDep = {};
                 const cffStateRegister = options.controlFlowFlattening !== false ? vmProfile.registerCount - 1 : undefined;
+                // Build register scramble maps if polymorphic mode enabled
+                let scrambleMap = null, reverseScrambleMap = null;
+                if (options.polymorphic) {
+                    const cffEnabled = options.controlFlowFlattening !== false;
+                    const sm = buildRegisterScramble(vmProfile.registerCount, cffEnabled, integrityKey);
+                    scrambleMap = sm.scrambleMap;
+                    reverseScrambleMap = sm.reverseMap;
+                }
                 const generator = new FunctionBytecodeGenerator(functionBody, undefined, {
                     registerCount: vmProfile.registerCount,
-                    cffStateRegister
+                    cffStateRegister,
+                    registerScrambleMap: scrambleMap,
+                    reverseScrambleMap: reverseScrambleMap
                 });
 
                 // Reserve scratch registers for opaque predicates to avoid clobbering live registers
@@ -866,6 +919,11 @@ async function transpile(code, options) {
                     }
                 } else {
                     generator.opaqueScratch = null;
+                }
+
+                // Scramble opaque scratch registers if polymorphic
+                if (options.polymorphic && generator.opaqueScratch) {
+                    generator.opaqueScratch = generator.opaqueScratch.map(reg => scrambleMap.get(reg) ?? reg);
                 }
 
                 for (const dependency of dependencies) {
@@ -926,16 +984,22 @@ async function transpile(code, options) {
                 }
                 let cffInitialStateId = 0;
                 if (options.controlFlowFlattening !== false) {
-                    const cffResult = applyControlFlowFlattening(generator.chunk, vmProfile.registerCount - 1);
+                    const cffResult = applyControlFlowFlattening(generator.chunk, vmProfile.registerCount - 1, { polyEndian });
                     if (cffResult.chunk) {
                         generator.chunk = cffResult.chunk;
                     }
                     cffInitialStateId = cffResult.initialStateId || 0;
                 }
                 if (options.opaquePredicates !== false && generator.opaqueScratch) {
-                    insertOpaquePredicates(generator.chunk, generator.opaqueScratch, vmProfile.registerCount, options.opaquePredicateOptions);
+                    insertOpaquePredicates(generator.chunk, generator.opaqueScratch, vmProfile.registerCount, {
+                        ...(options.opaquePredicateOptions || {}),
+                        polyEndian
+                    });
                 }
-
+                
+                // Set endianness in the VM profile for runtime
+                vmProfile.polyEndian = polyEndian;
+                
                 generationResult = {
                     cffInitialStateId,
                     aliasSetup,
@@ -1007,6 +1071,9 @@ async function transpile(code, options) {
             bytecodeEncryptionKey,
             vmProfile
         })
+        } finally {
+            setEndian("BE");
+        }
     }
 
     walk.simple(ast, {
@@ -1021,12 +1088,12 @@ async function transpile(code, options) {
         obfuscateOpcodes(chunks, vmAST)
     }
 
-    rewriteQueue.forEach(({result, node, chunk, integrityKey, bytecodeKeyId, bytecodeEncryptionKey}) => {
+    rewriteQueue.forEach(({result, node, chunk, integrityKey, bytecodeKeyId, bytecodeEncryptionKey, vmProfile}) => {
         const opcodeSeed = JSVM.deriveOpcodeStateSeed(integrityKey);
         const jumpSeed = JSVM.deriveJumpTargetSeed(integrityKey);
         const instructionSeed = JSVM.deriveInstructionByteSeed(integrityKey);
         applyStatefulOpcodeEncoding(chunk, opcodeSeed);
-        applyJumpTargetEncoding(chunk, jumpSeed);
+        applyJumpTargetEncoding(chunk, jumpSeed, vmProfile.polyEndian);
         applyPerInstructionEncoding(chunk, instructionSeed);
         const bytecode = zlib.deflateSync(Buffer.from(chunk.toBytes())).toString(encoding);
         const integritySalt = crypto.randomBytes(8).toString("hex");
@@ -1042,6 +1109,7 @@ async function transpile(code, options) {
     if (bytecodeKeyRegistrations.length > 0) {
         accompanyingVM = `${accompanyingVM}\n${bytecodeKeyRegistrations}\n`;
     }
+
     let transpiledResult = escodegen.generate(ast);
 
     if (options.passes.has("ObfuscateVM")) {
