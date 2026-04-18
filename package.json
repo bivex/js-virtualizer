@@ -21,7 +21,8 @@
     "audit": "bun audit",
     "demo:fingerprint": "bun examples/fingerprint.js",
     "demo:fingerprint:browser": "bun examples/browserFingerprint.js",
-    "demo:ms": "bun examples/ms.js"
+    "demo:ms": "bun examples/ms.js",
+    "fuzz": "npx jazzer fuzz/register-protection.js --sync -- -max_total_time=30"
   },
   "jest": {
     "transform": {}
