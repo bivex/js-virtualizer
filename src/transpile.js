@@ -1205,21 +1205,18 @@ async function transpile(code, options) {
             const buildCffCode = `InnerVM.buildCffProgram = function(pairs, ipRegIndex) {
                 var bytes = [];
                 var patchTable = [];
-                // I_LOAD_DWORD(1) r0, {currentState placeholder}
-                bytes.push(1, 0, 0, 0, 0, 0);
-                patchTable.push({position: 2, operand: 0});
                 var numEntries = pairs.length / 2;
                 for (var i = 0; i < numEntries; i++) {
                     // I_LOAD_DWORD(1) r1, {entryState placeholder}
                     bytes.push(1, 1, 0, 0, 0, 0);
-                    patchTable.push({position: bytes.length - 4, operand: 1 + i * 2});
+                    patchTable.push({position: bytes.length - 4, operand: i * 2});
                     // I_EQ(9) r2, r0, r1
                     bytes.push(9, 2, 0, 1);
                     // I_JZ(10) r2, skip over match handling (10 bytes: LOAD_DWORD(6) + WRITE_OUTER(3) + END(1))
-                    bytes.push(10, 2, 0, 10);
+                    bytes.push(10, 2, 10, 0, 0, 0);
                     // I_LOAD_DWORD(1) r3, {targetIP placeholder}
                     bytes.push(1, 3, 0, 0, 0, 0);
-                    patchTable.push({position: bytes.length - 4, operand: 1 + i * 2 + 1});
+                    patchTable.push({position: bytes.length - 4, operand: i * 2 + 1});
                     // I_WRITE_OUTER(3) {ipRegIndex}, r3
                     bytes.push(3, ipRegIndex & 0xFF, 3);
                     // I_END(15)
@@ -1228,32 +1225,28 @@ async function transpile(code, options) {
                 // Final I_END(15) — no match found
                 bytes.push(15);
                 return {bytecode: bytes, patchTable: patchTable};
-            };`;
-            const buildCffAST = acorn.parse(buildCffCode, {ecmaVersion: "latest", sourceType: "module"});
+            }`;
+            const buildCffAST = acorn.parse(buildCffCode, {ecmaVersion: "latest"});
             vmAST.body.splice(innerVMIdx + 1, 0, ...buildCffAST.body);
-        }
 
-        // Replace outer handlers with trampolines in vmAST's implOpcode object
-        function findImplOpcodeObject(ast) {
-            let result = null;
-            const walk = require("acorn-walk");
-            walk.simple(ast, {
-                VariableDeclaration(node) {
-                    for (const decl of node.declarations) {
-                        if (decl.id && decl.id.name === "implOpcode" && decl.init && decl.init.type === "ObjectExpression") {
-                            result = decl.init;
+                // Replace outer handlers with trampolines in vmAST's implOpcode object
+                function findImplOpcodeObject(ast) {
+                    let result = null;
+                    const walk = require("acorn-walk");
+                    walk.simple(ast, {
+                        VariableDeclaration(node) {
+                            for (const decl of node.declarations) {
+                                if (decl.id && decl.id.name === "implOpcode" && decl.init && decl.init.type === "ObjectExpression") {
+                                    result = decl.init;
+                                }
+                            }
                         }
-                    }
+                    });
+                    return result;
                 }
-            });
-            return result;
-        }
-
-        const implOpcodeProp = findImplOpcodeObject(vmAST);
-        if (implOpcodeProp) {
-            const handlerMap = implOpcodeProp;
-            if (handlerMap.type === "ObjectExpression") {
-                // Replace ADD handler
+                const handlerMap = findImplOpcodeObject(vmAST);
+                if (handlerMap) {
+                    // Replace ADD handler
                 const addHandler = handlerMap.properties.find((p) => p.key && p.key.name === "ADD");
                 if (addHandler) {
                     const trampolineSrc = `function() {
@@ -1314,9 +1307,6 @@ async function transpile(code, options) {
                             prog[entry.position + 1] = (val >>> 16) & 0xFF;
                             prog[entry.position + 2] = (val >>> 8) & 0xFF;
                             prog[entry.position + 3] = val & 0xFF;
-                        }
-                        for (var k = 0; k < prog.length; k++) {
-                            prog[k] = prog[k] ^ ((${nestedKey >>> 0} ^ ((k * 17) | 0)) & 0xFF);
                         }
                         this._innerVM.loadProgram(prog);
                         this._innerVM.regs[0] = currentState;
