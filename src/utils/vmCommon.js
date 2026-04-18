@@ -112,6 +112,14 @@ function deriveInstructionByteSeed(key) {
     return createSeedFromString(`instruction:${String(key ?? "")}`, 0x2e5aa50d) || 0x2e5aa50d;
 }
 
+function deriveNestedKey(key) {
+    return createSeedFromString(`nested:${String(key ?? "")}`, 0x3c2b1a09) || 0x3c2b1a09;
+}
+
+function deriveInnerShuffleSeed(key) {
+    return createSeedFromString(`inner-shuffle:${String(key ?? "")}`, 0x5a4b3c2d) || 0x5a4b3c2d;
+}
+
 function createOpcodePositionMask(seed, position) {
     let state = (seed ^ Math.imul((position + 1) >>> 0, 0x9e3779b1)) >>> 0;
     state = rotateLeft(state, position % 23 + 5);
@@ -974,6 +982,8 @@ module.exports = {
     deriveRuntimeDispatchSeed,
     deriveAntiDebugSeed,
     deriveInstructionByteSeed,
+    deriveNestedKey,
+    deriveInnerShuffleSeed,
     createOpcodePositionMask,
     createJumpTargetByteMask,
     createInstructionByteMask,
