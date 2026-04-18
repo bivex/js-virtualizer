@@ -1,0 +1,124 @@
+
+> js-virtualizer@1.0.2 test:transpiler
+> jest tests/transpiler.test.js --runInBand
+
+  console.log
+    <12:13> [34mJSVM > [0m[36mVirtualizing Function "evaluate"[0m
+
+      at log (src/utils/log.js:62:13)
+
+  console.log
+    <12:13> [34mJSVM > [0m[35mOutput register: 109[0m
+
+      at log (src/utils/log.js:62:13)
+
+  console.log
+    <12:13> [34mJSVM > [0m[35mVM profile vm_3f0382a68c: 192 regs, clustered dispatcher[0m
+
+      at log (src/utils/log.js:62:13)
+
+  console.log
+    <12:13> [34mJSVM > [0m[32mSuccessfully Virtualized Function "evaluate"[0m
+
+      at log (src/utils/log.js:62:13)
+
+  console.log
+    <12:13> [34mJSVM > [0m[36mVirtualizing Function "evaluate"[0m
+
+      at log (src/utils/log.js:62:13)
+
+  console.log
+    <12:13> [34mJSVM > [0m[35mOutput register: 221[0m
+
+      at log (src/utils/log.js:62:13)
+
+  console.log
+    <12:13> [34mJSVM > [0m[35mVM profile vm_7d23c45322: 240 regs, clustered dispatcher[0m
+
+      at log (src/utils/log.js:62:13)
+
+  console.log
+    <12:13> [34mJSVM > [0m[32mSuccessfully Virtualized Function "evaluate"[0m
+
+      at log (src/utils/log.js:62:13)
+
+  console.log
+    <12:13> [34mJSVM > [0m[36mVirtualizing Function "__jsv_top_init_110a159fd1"[0m
+
+      at log (src/utils/log.js:62:13)
+
+  console.log
+    <12:13> [34mJSVM > [0m[35mOutput register: 151[0m
+
+      at log (src/utils/log.js:62:13)
+
+  console.log
+    <12:13> [34mJSVM > [0m[35mVM profile vm_8214676de5: 240 regs, striped dispatcher[0m
+
+      at log (src/utils/log.js:62:13)
+
+  console.log
+    <12:13> [34mJSVM > [0m[32mSuccessfully Virtualized Function "__jsv_top_init_110a159fd1"[0m
+
+      at log (src/utils/log.js:62:13)
+
+  console.log
+    <12:13> [34mJSVM > [0m[36mVirtualizing Function "evaluate"[0m
+
+      at log (src/utils/log.js:62:13)
+
+  console.log
+    <12:13> [34mJSVM > [0m[35mOutput register: 40[0m
+
+      at log (src/utils/log.js:62:13)
+
+  console.log
+    <12:13> [34mJSVM > [0m[35mVM profile vm_272bf88084: 224 regs, striped dispatcher[0m
+
+      at log (src/utils/log.js:62:13)
+
+  console.log
+    <12:13> [34mJSVM > [0m[32mSuccessfully Virtualized Function "evaluate"[0m
+
+      at log (src/utils/log.js:62:13)
+
+  console.log
+    <12:13> [34mJSVM > [0m[36mVirtualizing Function "evaluate"[0m
+
+      at log (src/utils/log.js:62:13)
+
+  console.log
+    <12:13> [34mJSVM > [0m[35mOutput register: 130[0m
+
+      at log (src/utils/log.js:62:13)
+
+  console.log
+    <12:13> [34mJSVM > [0m[35mVM profile vm_7d88a21de8: 240 regs, striped dispatcher[0m
+
+      at log (src/utils/log.js:62:13)
+
+  console.log
+    <12:13> [34mJSVM > [0m[32mSuccessfully Virtualized Function "evaluate"[0m
+
+      at log (src/utils/log.js:62:13)
+
+  console.log
+    <12:13> [34mJSVM > [0m[36mVirtualizing Function "evaluate"[0m
+
+      at log (src/utils/log.js:62:13)
+
+  console.log
+    <12:13> [34mJSVM > [0m[35mOutput register: 148[0m
+
+      at log (src/utils/log.js:62:13)
+
+  console.log
+    <12:13> [34mJSVM > [0m[35mVM profile vm_30aa7b7ed3: 224 regs, clustered dispatcher[0m
+
+      at log (src/utils/log.js:62:13)
+
+  console.log
+    <12:13> [34mJSVM > [0m[32mSuccessfully Virtualized Function "evaluate"[0m
+
+      at log (src/utils/log.js:62:13)
+
