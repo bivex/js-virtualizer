@@ -462,8 +462,8 @@ function createRegisterProtectionMask(seed, register) {
 }
 
 function createProtectedRegisterValue(state, register, value) {
-    state.laneEpoch += 1;
-    const token = state.nextToken++;
+    state.laneEpoch = (state.laneEpoch + 1) >>> 0;
+    const token = state.nextToken = (state.nextToken + 1) >>> 0;
     state.heap.set(token, value);
 
     const laneSeed = (state.seed ^ Math.imul(state.laneEpoch, 0x9e3779b1)) >>> 0;
