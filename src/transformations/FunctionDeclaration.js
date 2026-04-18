@@ -139,26 +139,7 @@ function resolveFunctionDeclaration(node, options) {
         captureMappings.push(captureRegister, sourceRegister)
     }
 
-    const processStack = this.getProcessStack('vfunc')
-
-    while (processStack.length) {
-        const top = processStack[processStack.length - 1]
-        if (top.label !== label) {
-            break
-        }
-        const {type, computedOutput} = top.metadata
-        switch (type) {
-            case 'vfunc_return': {
-                log(new LogData(`Detected vfunc return at ${computedOutput}!`, 'accent', true))
-                top.modifyArgs(outputRegister, computedOutput)
-                break
-            }
-            default: {
-                throw new Error(`Unknown vfunc process: ${type}`)
-            }
-        }
-        processStack.pop()
-    }
+    this.resolvePendingJumps(label, 'vfunc', {outputRegister})
     // if it did not return before this point, we need to return nothing
     this.chunk.append(new Opcode('SET_UNDEFINED', outputRegister))
     this.chunk.append(new Opcode('END'))

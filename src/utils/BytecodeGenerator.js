@@ -681,6 +681,55 @@ class FunctionBytecodeGenerator {
         }
     }
 
+    resolvePendingJumps(label, contextType, options = {}) {
+        const processStack = this.getProcessStack(contextType)
+        while (processStack.length) {
+            const top = processStack[processStack.length - 1]
+            if (top.label !== label) break
+            const {type, ip, computedOutput} = top.metadata
+            switch (contextType) {
+                case 'loops': {
+                    switch (type) {
+                        case 'break': {
+                            log(new LogData(`Detected break statement at ${ip}, jumping to end of ${options.loopName}`, 'accent', true))
+                            top.modifyArgs(this.encodeDWORD(this.chunk.getCurrentIP() - ip))
+                            break
+                        }
+                        case 'continue': {
+                            log(new LogData(`Detected continue statement at ${ip}, jumping to start of ${options.loopName}`, 'accent', true))
+                            top.modifyArgs(this.encodeDWORD(options.continueGoto - ip))
+                            break
+                        }
+                        default: {
+                            throw new Error(`Unknown loop control type: ${type}`)
+                        }
+                    }
+                    break
+                }
+                case 'switch': {
+                    if (type !== 'break') {
+                        throw new Error(`Unknown switch process: ${type}`)
+                    }
+                    log(new LogData(`Detected break statement at ${ip}, jumping to end of switch statement`, 'accent', true))
+                    top.modifyArgs(this.encodeDWORD(this.chunk.getCurrentIP() - ip))
+                    break
+                }
+                case 'vfunc': {
+                    if (type !== 'vfunc_return') {
+                        throw new Error(`Unknown vfunc process: ${type}`)
+                    }
+                    log(new LogData(`Detected vfunc return at ${computedOutput}!`, 'accent', true))
+                    top.modifyArgs(options.outputRegister, computedOutput)
+                    break
+                }
+                default: {
+                    throw new Error(`Unknown context type: ${contextType}`)
+                }
+            }
+            processStack.pop()
+        }
+    }
+
     getBytecode() {
         log(`\nResulting Bytecode:\n\n${this.chunk.toString()}`)
         return this.chunk.toBytes();

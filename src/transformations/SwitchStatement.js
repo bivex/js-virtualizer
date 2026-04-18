@@ -79,23 +79,7 @@ function resolveSwitchStatement(node) {
 
     if (previousJumpUnconditional) previousJumpUnconditional.modifyArgs(this.encodeDWORD(this.chunk.getCurrentIP() - previousJumpUnconditionalIP))
 
-    const processStack = this.getProcessStack('switch')
-
-    while (processStack.length) {
-        const top = processStack[processStack.length - 1]
-        if (top.label !== label) {
-            break
-        }
-        const {type, ip} = top.metadata
-        switch (type) {
-            case 'break': {
-                log(new LogData(`Detected break statement at ${ip}, jumping to end of switch statement`, 'accent', true))
-                top.modifyArgs(this.encodeDWORD(this.chunk.getCurrentIP() - ip))
-                break
-            }
-        }
-        processStack.pop()
-    }
+    this.resolvePendingJumps(label, 'switch')
 
 
     this.exitContext('switch')

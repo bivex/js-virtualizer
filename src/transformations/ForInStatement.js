@@ -47,28 +47,7 @@ function resolveForInStatement(node) {
     this.chunk.append(new Opcode('JUMP_UNCONDITIONAL', this.encodeDWORD(startIP - this.chunk.getCurrentIP())))
     endJump.modifyArgs(testRegister, this.encodeDWORD(this.chunk.getCurrentIP() - endJumpIP))
 
-    const processStack = this.getProcessStack('loops')
-
-    while (processStack.length) {
-        const top = processStack[processStack.length - 1]
-        if (top.label !== label) {
-            break
-        }
-        const {type, ip} = top.metadata
-        switch (type) {
-            case 'break': {
-                log(new LogData(`Detected break statement at ${ip}, jumping to end of for in loop`, 'accent', true))
-                top.modifyArgs(this.encodeDWORD(this.chunk.getCurrentIP() - ip))
-                break
-            }
-            case 'continue': {
-                log(new LogData(`Detected continue statement at ${ip}, jumping to start of for in loop`, 'accent', true))
-                top.modifyArgs(this.encodeDWORD(continueGoto - ip))
-                break
-            }
-        }
-        processStack.pop()
-    }
+    this.resolvePendingJumps(label, 'loops', {continueGoto, loopName: 'for in loop'})
 
     if (needsCleanup(right)) this.freeTempLoad(rhs.outputRegister)
     if (rhs.borrowed) this.freeTempLoad(iteratorRegister)
