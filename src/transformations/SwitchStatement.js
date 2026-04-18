@@ -14,7 +14,7 @@
  */
 
 const {log, LogData} = require("../utils/log");
-const {Opcode, BytecodeValue, encodeDWORD} = require("../utils/assembler");
+const {Opcode, BytecodeValue} = require("../utils/assembler");
 const {needsCleanup} = require("../utils/constants");
 
 // VOID result, all registers are cleaned up before returning
@@ -50,34 +50,34 @@ function resolveSwitchStatement(node) {
         this.chunk.append(new Opcode('EQ', testResultRegister, discriminantRegister, equalTo))
         if (needsCleanup(test) && !borrowed) this.freeTempLoad(equalTo)
         const jumpNEQIP = this.chunk.getCurrentIP()
-        const jumpNEQ = new Opcode('JUMP_NOT_EQ', testResultRegister, encodeDWORD(0))
+        const jumpNEQ = new Opcode('JUMP_NOT_EQ', testResultRegister, this.encodeDWORD(0))
         this.chunk.append(jumpNEQ)
         if (previousJumpUnconditional) {
-            previousJumpUnconditional.modifyArgs(encodeDWORD(this.chunk.getCurrentIP() - previousJumpUnconditionalIP))
+            previousJumpUnconditional.modifyArgs(this.encodeDWORD(this.chunk.getCurrentIP() - previousJumpUnconditionalIP))
             previousJumpUnconditional = null
             previousJumpUnconditionalIP = null
         }
         this.generate(consequent)
         // no break encountered: jump to the beginning of the next clause
         previousJumpUnconditionalIP = this.chunk.getCurrentIP()
-        const jumpUnconditional = new Opcode('JUMP_UNCONDITIONAL', encodeDWORD(0))
+        const jumpUnconditional = new Opcode('JUMP_UNCONDITIONAL', this.encodeDWORD(0))
         previousJumpUnconditional = jumpUnconditional
         this.chunk.append(jumpUnconditional)
-        jumpNEQ.modifyArgs(testResultRegister, encodeDWORD(this.chunk.getCurrentIP() - jumpNEQIP))
+        jumpNEQ.modifyArgs(testResultRegister, this.encodeDWORD(this.chunk.getCurrentIP() - jumpNEQIP))
     }
 
     // default always goes to the end of the switch statement regardless of its position in the consequent array
     if (defaultCase) {
         const startIP = this.chunk.getCurrentIP()
         if (previousJumpUnconditional) {
-            previousJumpUnconditional.modifyArgs(encodeDWORD(startIP - previousJumpUnconditionalIP))
+            previousJumpUnconditional.modifyArgs(this.encodeDWORD(startIP - previousJumpUnconditionalIP))
             previousJumpUnconditional = null
             previousJumpUnconditionalIP = null
         }
         this.generate(defaultCase.consequent)
     }
 
-    if (previousJumpUnconditional) previousJumpUnconditional.modifyArgs(encodeDWORD(this.chunk.getCurrentIP() - previousJumpUnconditionalIP))
+    if (previousJumpUnconditional) previousJumpUnconditional.modifyArgs(this.encodeDWORD(this.chunk.getCurrentIP() - previousJumpUnconditionalIP))
 
     const processStack = this.getProcessStack('switch')
 
@@ -90,7 +90,7 @@ function resolveSwitchStatement(node) {
         switch (type) {
             case 'break': {
                 log(new LogData(`Detected break statement at ${ip}, jumping to end of switch statement`, 'accent', true))
-                top.modifyArgs(encodeDWORD(this.chunk.getCurrentIP() - ip))
+                top.modifyArgs(this.encodeDWORD(this.chunk.getCurrentIP() - ip))
                 break
             }
         }

@@ -263,7 +263,7 @@ function applyControlFlowFlattening(chunk, cffStateReg, options = {}) {
                 }
             }
             // Jump to dispatch placeholder — will be patched later
-            newOpcodes.push(new Opcode("JUMP_UNCONDITIONAL", encodeDWORD(0)));
+            newOpcodes.push(new Opcode("JUMP_UNCONDITIONAL", encodeDWORD(0, polyEndian)));
             rewrittenBlocks.push({ ...block, opcodes: newOpcodes, stateId: stateIds.get(block.index), needsDispatchJump: true });
             continue;
         }
@@ -287,14 +287,14 @@ function applyControlFlowFlattening(chunk, cffStateReg, options = {}) {
             // Taken stub: SET cffReg, takenState; JUMP dispatch
             const takenStub = [
                 new Opcode("SET", cffStateReg, takenState),
-                new Opcode("JUMP_UNCONDITIONAL", encodeDWORD(0)), // patched later
+                new Opcode("JUMP_UNCONDITIONAL", encodeDWORD(0, polyEndian)), // patched later
             ];
             const takenStubBytes = takenStub.reduce((s, op) => s + op.toBytes().length, 0);
 
             // Not-taken stub: SET cffReg, notTakenState; JUMP dispatch
             const notTakenStub = [
                 new Opcode("SET", cffStateReg, notTakenState),
-                new Opcode("JUMP_UNCONDITIONAL", encodeDWORD(0)), // patched later
+                new Opcode("JUMP_UNCONDITIONAL", encodeDWORD(0, polyEndian)), // patched later
             ];
 
             // Conditional jump over not-taken stub to taken stub
@@ -306,7 +306,7 @@ function applyControlFlowFlattening(chunk, cffStateReg, options = {}) {
             // so offset = notTakenStubBytes + 6
             const condJumpOffset = notTakenStubBytes + 6;
 
-            newOpcodes.push(new Opcode(lastOpcode.name, condReg, encodeDWORD(condJumpOffset)));
+            newOpcodes.push(new Opcode(lastOpcode.name, condReg, encodeDWORD(condJumpOffset, polyEndian)));
             notTakenStub.forEach(op => newOpcodes.push(op));
             takenStub.forEach(op => newOpcodes.push(op));
 
@@ -330,14 +330,14 @@ function applyControlFlowFlattening(chunk, cffStateReg, options = {}) {
             // Not-taken stub
             const notTakenStub = [
                 new Opcode("SET", cffStateReg, notTakenState),
-                new Opcode("JUMP_UNCONDITIONAL", encodeDWORD(0)),
+                new Opcode("JUMP_UNCONDITIONAL", encodeDWORD(0, polyEndian)),
             ];
             const notTakenStubBytes = notTakenStub.reduce((s, op) => s + op.toBytes().length, 0);
 
             // Taken stub
             const takenStub = [
                 new Opcode("SET", cffStateReg, takenState),
-                new Opcode("JUMP_UNCONDITIONAL", encodeDWORD(0)),
+                new Opcode("JUMP_UNCONDITIONAL", encodeDWORD(0, polyEndian)),
             ];
 
             // TEST + conditional jump over not-taken to taken
@@ -345,7 +345,7 @@ function applyControlFlowFlattening(chunk, cffStateReg, options = {}) {
             const condJumpName = lastOpcode.name === "MACRO_TEST_JUMP_EQ" ? "JUMP_EQ" : "JUMP_NOT_EQ";
 
             newOpcodes.push(new Opcode("TEST", testDest, testSrc));
-            newOpcodes.push(new Opcode(condJumpName, jumpReg, encodeDWORD(condJumpOffset)));
+            newOpcodes.push(new Opcode(condJumpName, jumpReg, encodeDWORD(condJumpOffset, polyEndian)));
             notTakenStub.forEach(op => newOpcodes.push(op));
             takenStub.forEach(op => newOpcodes.push(op));
 
@@ -357,7 +357,7 @@ function applyControlFlowFlattening(chunk, cffStateReg, options = {}) {
         const nextBlockIdx = block.index + 1;
         if (nextBlockIdx < blocks.length) {
             newOpcodes.push(new Opcode("SET", cffStateReg, stateIds.get(nextBlockIdx)));
-            newOpcodes.push(new Opcode("JUMP_UNCONDITIONAL", encodeDWORD(0)));
+            newOpcodes.push(new Opcode("JUMP_UNCONDITIONAL", encodeDWORD(0, polyEndian)));
             rewrittenBlocks.push({ ...block, opcodes: newOpcodes, stateId: stateIds.get(block.index), needsDispatchJump: true });
         } else {
             rewrittenBlocks.push({ ...block, opcodes: newOpcodes, stateId: stateIds.get(block.index) });
@@ -433,7 +433,7 @@ function applyControlFlowFlattening(chunk, cffStateReg, options = {}) {
     // Build the full opcode array in shuffled order
     const headerOpcodes = [
         new Opcode("SET", cffStateReg, initialStateId),
-        new Opcode("JUMP_UNCONDITIONAL", encodeDWORD(0)), // will be patched
+        new Opcode("JUMP_UNCONDITIONAL", encodeDWORD(0, polyEndian)), // will be patched
     ];
     const dispatchOpcode = new Opcode("CFF_DISPATCH", dispatchData);
 
@@ -464,7 +464,7 @@ function applyControlFlowFlattening(chunk, cffStateReg, options = {}) {
     // Target = cur + offset - 1 = 4 + offset - 1 = 3 + offset.
     // We want target = realDispatchByteOffset (the CFF_DISPATCH opcode position).
     // So offset = realDispatchByteOffset - 3.
-    headerOpcodes[1].modifyArgs(encodeDWORD(realDispatchByteOffset - 3));
+    headerOpcodes[1].modifyArgs(encodeDWORD(realDispatchByteOffset - 3, polyEndian));
 
     // Now assemble all blocks in shuffled order and compute their actual byte positions
     const allOpcodes = [...headerOpcodes, dispatchOpcode];
@@ -507,7 +507,7 @@ function applyControlFlowFlattening(chunk, cffStateReg, options = {}) {
                 // We want target = realDispatchByteOffset (position of CFF_DISPATCH)
                 // So offset = realDispatchByteOffset - rebuildPos
                 const offset = realDispatchByteOffset - rebuildPos;
-                op.modifyArgs(encodeDWORD(offset));
+                op.modifyArgs(encodeDWORD(offset, polyEndian));
                 delete op._isCffDispatchJump;
             }
             allOpcodes.push(op);

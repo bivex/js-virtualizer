@@ -14,7 +14,7 @@
  */
 
 const {log, LogData} = require("../utils/log");
-const {Opcode, encodeDWORD} = require("../utils/assembler");
+const {Opcode} = require("../utils/assembler");
 const assert = require("node:assert");
 
 // VOID result, all registers are cleaned up before returning
@@ -25,7 +25,7 @@ function resolveTryStatement(node) {
 
     const startIP = this.chunk.getCurrentIP()
     const errorRegister = this.getAvailableTempLoad()
-    const catchOpcode = new Opcode('TRY_CATCH_FINALLY', errorRegister, encodeDWORD(0), encodeDWORD(0))
+    const catchOpcode = new Opcode('TRY_CATCH_FINALLY', errorRegister, this.encodeDWORD(0), this.encodeDWORD(0))
 
     this.chunk.append(catchOpcode)
     this.handleNode(block)
@@ -39,7 +39,7 @@ function resolveTryStatement(node) {
     if (finalizer) this.handleNode(finalizer)
     this.chunk.append(new Opcode('END'))
 
-    catchOpcode.modifyArgs(errorRegister, encodeDWORD(catchIP - startIP), encodeDWORD(finallyIP - startIP))
+    catchOpcode.modifyArgs(errorRegister, this.encodeDWORD(catchIP - startIP), this.encodeDWORD(finallyIP - startIP))
 
     this.freeTempLoad(errorRegister)
 }

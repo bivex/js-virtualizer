@@ -14,7 +14,7 @@
  */
 
 const {log} = require("../utils/log");
-const {Opcode, BytecodeValue, encodeDWORD} = require("../utils/assembler");
+const {Opcode, BytecodeValue} = require("../utils/assembler");
 const {registers, needsCleanup} = require("../utils/constants");
 
 // ALWAYS produces a mutable result, ownership is transferred to the caller
@@ -34,9 +34,9 @@ function resolveCallExpression(node, awaited) {
     const counterRegister = this.getAvailableTempLoad()
     const oneRegister = this.getAvailableTempLoad()
 
-    this.chunk.append(new Opcode('SETUP_ARRAY', argsRegister, encodeDWORD(arguments.length)));
-    this.chunk.append(new Opcode('LOAD_DWORD', counterRegister, encodeDWORD(0)));
-    this.chunk.append(new Opcode('LOAD_DWORD', oneRegister, encodeDWORD(1)));
+    this.chunk.append(new Opcode('SETUP_ARRAY', argsRegister, this.encodeDWORD(arguments.length)));
+    this.chunk.append(new Opcode('LOAD_DWORD', counterRegister, this.encodeDWORD(0)));
+    this.chunk.append(new Opcode('LOAD_DWORD', oneRegister, this.encodeDWORD(1)));
 
     log(`Arguments allocated at ${this.TLMap[argsRegister]} (${argsRegister}) with size ${arguments.length}`)
     log(`Counter register is at ${this.TLMap[counterRegister]} (${counterRegister})`)

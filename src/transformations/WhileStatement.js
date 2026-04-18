@@ -14,7 +14,7 @@
  */
 
 const {log, LogData} = require("../utils/log");
-const {encodeDWORD, Opcode} = require("../utils/assembler");
+const {Opcode} = require("../utils/assembler");
 const {needsCleanup} = require("../utils/constants");
 
 // VOID result, all registers are cleaned up before returningfor
@@ -33,13 +33,13 @@ function resolveWhileStatement(node) {
     this.chunk.append(new Opcode('TEST', testResult, testRegister))
     // this will exit the loop if the test fails
     const endJumpIP = this.chunk.getCurrentIP()
-    const endJump = new Opcode('JUMP_NOT_EQ', testResult, encodeDWORD(0))
+    const endJump = new Opcode('JUMP_NOT_EQ', testResult, this.encodeDWORD(0))
     this.chunk.append(endJump)
     this.enterContext('loops', label)
     this.handleNode(body)
     const continueGoto = this.chunk.getCurrentIP()
-    this.chunk.append(new Opcode('JUMP_UNCONDITIONAL', encodeDWORD(startIP - this.chunk.getCurrentIP())))
-    endJump.modifyArgs(testResult, encodeDWORD(this.chunk.getCurrentIP() - endJumpIP))
+    this.chunk.append(new Opcode('JUMP_UNCONDITIONAL', this.encodeDWORD(startIP - this.chunk.getCurrentIP())))
+    endJump.modifyArgs(testResult, this.encodeDWORD(this.chunk.getCurrentIP() - endJumpIP))
 
     const processStack = this.getProcessStack('loops')
 
@@ -52,12 +52,12 @@ function resolveWhileStatement(node) {
         switch (type) {
             case 'break': {
                 log(new LogData(`Detected break statement at ${ip}, jumping to end of for of loop`, 'accent', true))
-                top.modifyArgs(encodeDWORD(this.chunk.getCurrentIP() - ip))
+                top.modifyArgs(this.encodeDWORD(this.chunk.getCurrentIP() - ip))
                 break
             }
             case 'continue': {
                 log(new LogData(`Detected continue statement at ${ip}, jumping to start of for of loop`, 'accent', true))
-                top.modifyArgs(encodeDWORD(continueGoto - ip))
+                top.modifyArgs(this.encodeDWORD(continueGoto - ip))
                 break
             }
         }

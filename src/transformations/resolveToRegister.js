@@ -46,7 +46,7 @@ function resolveExpression(expression, options) {
             } else {
                 const literalValue = new BytecodeValue(expression.name, this.getAvailableTempLoad());
                 outputRegister = literalValue.register
-                this.chunk.append(literalValue.getLoadOpcode());
+                this.chunk.append(literalValue.getLoadOpcode(this.endian));
                 log(new LogData(`Treating non-computed identifier as literal! Loading "${expression.name}" at register ${outputRegister}`, 'warn', true))
             }
             break
@@ -60,7 +60,7 @@ function resolveExpression(expression, options) {
         case 'Literal': {
             const tempRegister = this.getAvailableTempLoad();
             const literalValue = new BytecodeValue(expression.value, tempRegister);
-            this.chunk.append(literalValue.getLoadOpcode());
+            this.chunk.append(literalValue.getLoadOpcode(this.endian));
             outputRegister = literalValue.register
             log(`Loaded literal: ${expression.value} at register ${outputRegister}`)
             break

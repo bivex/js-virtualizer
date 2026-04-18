@@ -13,7 +13,7 @@
  * Commercial licensing available upon request.
  */
 
-const {Opcode, encodeDWORD, encodeArrayRegisters} = require("../utils/assembler");
+const {Opcode, encodeArrayRegisters} = require("../utils/assembler");
 const {log, LogData} = require("../utils/log");
 const {registerNames, needsCleanup} = require("../utils/constants");
 const {shuffle} = require("../utils/random");
@@ -57,7 +57,7 @@ function resolveFunctionDeclaration(node, options) {
     const captureMappings = []
 
     const jumpOverIP = this.chunk.getCurrentIP()
-    const jumpOver = new Opcode('JUMP_UNCONDITIONAL', encodeDWORD(0))
+    const jumpOver = new Opcode('JUMP_UNCONDITIONAL', this.encodeDWORD(0))
     this.chunk.append(jumpOver)
     const hasDefault = []
     const argRegisters = new Set()
@@ -163,8 +163,8 @@ function resolveFunctionDeclaration(node, options) {
     this.chunk.append(new Opcode('SET_UNDEFINED', outputRegister))
     this.chunk.append(new Opcode('END'))
     this.exitVFuncContext()
-    jumpOver.modifyArgs(encodeDWORD(this.chunk.getCurrentIP() - jumpOverIP))
-    this.chunk.append(new Opcode('VFUNC_SETUP_CALLBACK', encodeDWORD(startIP - this.chunk.getCurrentIP()),
+    jumpOver.modifyArgs(this.encodeDWORD(this.chunk.getCurrentIP() - jumpOverIP))
+    this.chunk.append(new Opcode('VFUNC_SETUP_CALLBACK', this.encodeDWORD(startIP - this.chunk.getCurrentIP()),
         options.declareRegister, outputRegister, isAsync ? 1 : 0, hasDynamicThis ? 1 : 0, hasDynamicThis ? thisRegister : 0, usesArguments ? 1 : 0, usesArguments ? argumentsRegister : 0, lastIsRest ? 1 : 0, encodeArrayRegisters(scrambledArgMap), encodeArrayRegisters(argOrder), encodeArrayRegisters(captureMappings)))
     this.freeTempLoad(outputRegister)
 

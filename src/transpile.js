@@ -26,7 +26,7 @@ const functionWrapperTemplate = readFileSync(path.join(__dirname, "./templates/f
 const requireTemplate = readFileSync(path.join(__dirname, "./templates/requireTemplate.template"), "utf-8");
 const crypto = require("crypto");
 const {DEFAULT_REGISTER_COUNT, FunctionBytecodeGenerator} = require("./utils/BytecodeGenerator");
-const {Opcode, encodeDWORD, encodeString, setEndian, getEndian} = require("./utils/assembler");
+const {Opcode, encodeDWORD, encodeString} = require("./utils/assembler");
 const escodegen = require("escodegen");
 const {log, LogData} = require("./utils/log");
 const zlib = require("node:zlib");
@@ -610,20 +610,20 @@ function createArgumentScramblingPlan(paramNames) {
     };
 }
 
-function createDeadCodeSequence() {
+function createDeadCodeSequence(endian = "BE") {
     const registers = Array.from({length: 6}, () => crypto.randomInt(16, 220));
     const [counterRegister, oneRegister, stringRegister, arrayRegister, numberRegister, flagRegister] = registers;
     const baitLabel = `__dead_${crypto.randomBytes(4).toString("hex")}`;
     const baitNumber = crypto.randomInt(256, 65535);
 
     return [
-        new Opcode("LOAD_DWORD", counterRegister, encodeDWORD(0)),
-        new Opcode("LOAD_DWORD", oneRegister, encodeDWORD(1)),
-        new Opcode("LOAD_STRING", stringRegister, encodeString(baitLabel)),
-        new Opcode("SETUP_ARRAY", arrayRegister, encodeDWORD(2)),
+        new Opcode("LOAD_DWORD", counterRegister, encodeDWORD(0, endian)),
+        new Opcode("LOAD_DWORD", oneRegister, encodeDWORD(1, endian)),
+        new Opcode("LOAD_STRING", stringRegister, encodeString(baitLabel, endian)),
+        new Opcode("SETUP_ARRAY", arrayRegister, encodeDWORD(2, endian)),
         new Opcode("SET_INDEX", arrayRegister, counterRegister, stringRegister),
         new Opcode("ADD", counterRegister, counterRegister, oneRegister),
-        new Opcode("LOAD_DWORD", numberRegister, encodeDWORD(baitNumber)),
+        new Opcode("LOAD_DWORD", numberRegister, encodeDWORD(baitNumber, endian)),
         new Opcode("SET_INDEX", arrayRegister, counterRegister, numberRegister),
         new Opcode("TEST", flagRegister, numberRegister),
         new Opcode("NOP")
@@ -669,12 +669,12 @@ function applyMacroOpcodes(chunk) {
     chunk.code = fused;
 }
 
-function injectDeadCode(chunk) {
-    const decoySequence = createDeadCodeSequence();
+function injectDeadCode(chunk, endian = "BE") {
+    const decoySequence = createDeadCodeSequence(endian);
     const decoyLength = decoySequence.reduce((total, opcode) => total + opcode.toBytes().length, 0);
 
     if (chunk.code.length === 0 || chunk.code[chunk.code.length - 1].name !== "END") {
-        chunk.append(new Opcode("JUMP_UNCONDITIONAL", encodeDWORD(5 + decoyLength)));
+        chunk.append(new Opcode("JUMP_UNCONDITIONAL", encodeDWORD(5 + decoyLength, endian)));
         decoySequence.forEach((opcode) => chunk.append(opcode));
         chunk.append(new Opcode("END"));
         return;
@@ -838,11 +838,10 @@ async function transpile(code, options) {
         const memoryProtectionKey = crypto.randomBytes(16).toString("hex");
         const antiDebugKey = crypto.randomBytes(16).toString("hex");
         const selfModifyKey = crypto.randomBytes(16).toString("hex");
-        // Polymorphic configuration: derive endianness from integrityKey and set assembler
+        // Polymorphic configuration: derive endianness from integrityKey
         const polyEndian = options.polymorphic
             ? (parseInt(integrityKey.slice(0, 8), 16) & 1 ? "LE" : "BE")
             : "BE";
-        setEndian(polyEndian);
         try {
         const usesArguments = usesIdentifier(node.body, "arguments");
         const usesThis = (() => {
@@ -885,7 +884,8 @@ async function transpile(code, options) {
                     registerCount: vmProfile.registerCount,
                     cffStateRegister,
                     registerScrambleMap: scrambleMap,
-                    reverseScrambleMap: reverseScrambleMap
+                    reverseScrambleMap: reverseScrambleMap,
+                    endian: polyEndian
                 });
 
                 // Reserve scratch registers for opaque predicates to avoid clobbering live registers
@@ -980,7 +980,7 @@ async function transpile(code, options) {
                 generator.generate();
                 applyMacroOpcodes(generator.chunk);
                 if (options.deadCodeInjection) {
-                    injectDeadCode(generator.chunk);
+                    injectDeadCode(generator.chunk, polyEndian);
                 }
                 let cffInitialStateId = 0;
                 if (options.controlFlowFlattening !== false) {
@@ -1072,7 +1072,6 @@ async function transpile(code, options) {
             vmProfile
         })
         } finally {
-            setEndian("BE");
         }
     }
 

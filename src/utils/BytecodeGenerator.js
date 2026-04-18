@@ -13,7 +13,7 @@
  * Commercial licensing available upon request.
  */
 
-const {VMChunk, Opcode, encodeDWORD, BytecodeValue} = require("./assembler");
+const {VMChunk, Opcode, encodeDWORD, encodeString: _encodeString, BytecodeValue} = require("./assembler");
 const crypto = require("crypto");
 const {registerNames, binaryOperatorToOpcode, needsCleanup} = require("./constants");
 const {log, LogData} = require("./log");
@@ -61,6 +61,7 @@ class FunctionBytecodeGenerator {
         }
         this.registerScrambleMap = options.registerScrambleMap || null;
         this.reverseScrambleMap = options.reverseScrambleMap || null;
+        this.endian = options.endian || "BE";
         this.outputRegister = this.randomRegister();
 
         // for arithmetics and loading values
@@ -136,6 +137,14 @@ class FunctionBytecodeGenerator {
         this.resolveFunctionDeclaration = resolveFunctionDeclaration.bind(this)
         this.resolveTryStatement = resolveTryStatement.bind(this)
         this.resolveSwitchStatement = resolveSwitchStatement.bind(this)
+    }
+
+    encodeDWORD(dword) {
+        return encodeDWORD(dword, this.endian);
+    }
+
+    encodeString(str) {
+        return _encodeString(str, this.endian);
     }
 
     dropVariable(variableName) {
@@ -524,8 +533,8 @@ class FunctionBytecodeGenerator {
                         const counterRegister = this.getAvailableTempLoad()
                         const oneRegister = this.getAvailableTempLoad()
 
-                        this.chunk.append(new Opcode('LOAD_DWORD', counterRegister, encodeDWORD(0)));
-                        this.chunk.append(new Opcode('LOAD_DWORD', oneRegister, encodeDWORD(1)));
+                        this.chunk.append(new Opcode('LOAD_DWORD', counterRegister, this.encodeDWORD(0)));
+                        this.chunk.append(new Opcode('LOAD_DWORD', oneRegister, this.encodeDWORD(1)));
 
                         const functionScoped = node.kind === 'var'
 
@@ -551,7 +560,7 @@ class FunctionBytecodeGenerator {
                             this.declareVariable(value.name, this.randomRegister(), {functionScoped})
                             const propRegister = this.randomRegister()
                             const prop = new BytecodeValue(key.name, propRegister)
-                            this.chunk.append(prop.getLoadOpcode())
+                            this.chunk.append(prop.getLoadOpcode(this.endian))
                             this.chunk.append(new Opcode('GET_PROP', this.getVariable(value.name), objectRegister, propRegister))
                             this.freeTempLoad(propRegister)
                         }
@@ -605,7 +614,7 @@ class FunctionBytecodeGenerator {
                 break
             }
             case 'BreakStatement': {
-                const opcode = new Opcode('JUMP_UNCONDITIONAL', encodeDWORD(0))
+                const opcode = new Opcode('JUMP_UNCONDITIONAL', this.encodeDWORD(0))
                 const {label, type} = this.findFirstLabelOfTypes(['loops', 'switch'])
                 opcode.markForProcessing(label, {
                     type: 'break',
@@ -616,7 +625,7 @@ class FunctionBytecodeGenerator {
                 break
             }
             case 'ContinueStatement': {
-                const opcode = new Opcode('JUMP_UNCONDITIONAL', encodeDWORD(0))
+                const opcode = new Opcode('JUMP_UNCONDITIONAL', this.encodeDWORD(0))
                 opcode.markForProcessing(this.getActiveLabel('loops'), {
                     type: 'continue',
                     ip: this.chunk.getCurrentIP()

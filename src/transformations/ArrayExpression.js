@@ -13,7 +13,7 @@
  * Commercial licensing available upon request.
  */
 
-const {Opcode, BytecodeValue, encodeDWORD} = require("../utils/assembler");
+const {Opcode, BytecodeValue} = require("../utils/assembler");
 const {needsCleanup} = require("../utils/constants");
 
 // ALWAYS produces a mutable result, ownership is transferred to the caller
@@ -24,9 +24,9 @@ function resolveArrayExpression(node) {
     const counterRegister = this.getAvailableTempLoad()
     const oneRegister = this.getAvailableTempLoad()
 
-    this.chunk.append(new Opcode('SETUP_ARRAY', arrayRegister, encodeDWORD(elements.length)));
-    this.chunk.append(new Opcode('LOAD_DWORD', counterRegister, encodeDWORD(0)));
-    this.chunk.append(new Opcode('LOAD_DWORD', oneRegister, encodeDWORD(1)));
+    this.chunk.append(new Opcode('SETUP_ARRAY', arrayRegister, this.encodeDWORD(elements.length)));
+    this.chunk.append(new Opcode('LOAD_DWORD', counterRegister, this.encodeDWORD(0)));
+    this.chunk.append(new Opcode('LOAD_DWORD', oneRegister, this.encodeDWORD(1)));
 
     elements.forEach((element) => {
         const elementRegister = this.resolveExpression(element).outputRegister

@@ -14,7 +14,7 @@
  */
 
 const {log, LogData} = require("../utils/log");
-const {Opcode, BytecodeValue, encodeDWORD} = require("../utils/assembler");
+const {Opcode, BytecodeValue} = require("../utils/assembler");
 const {needsCleanup} = require("../utils/constants");
 
 // VOID result, all registers are cleaned up before returning
@@ -30,7 +30,7 @@ function resolveIfStatement(node) {
     const testResult = borrowed ? this.getAvailableTempLoad() : testRegister
     this.chunk.append(new Opcode('TEST', testResult, testRegister))
     const jumpIP = this.chunk.getCurrentIP()
-    const alternateJumpOpcode = new Opcode('JUMP_NOT_EQ', testResult, encodeDWORD(0))
+    const alternateJumpOpcode = new Opcode('JUMP_NOT_EQ', testResult, this.encodeDWORD(0))
     this.chunk.append(alternateJumpOpcode)
 
     if (borrowed) this.freeTempLoad(testResult)
@@ -40,19 +40,19 @@ function resolveIfStatement(node) {
 
     if (alternate) {
         const endJumpIP = this.chunk.getCurrentIP()
-        const endJumpOpcode = new Opcode('JUMP_UNCONDITIONAL', encodeDWORD(0))
+        const endJumpOpcode = new Opcode('JUMP_UNCONDITIONAL', this.encodeDWORD(0))
         this.chunk.append(endJumpOpcode)
         const alternateJumpDistance = this.chunk.getCurrentIP() - jumpIP
-        alternateJumpOpcode.modifyArgs(testResult, encodeDWORD(alternateJumpDistance))
+        alternateJumpOpcode.modifyArgs(testResult, this.encodeDWORD(alternateJumpDistance))
         log(new LogData(`Detected alternate clause, setting alternate jump to: ${alternateJumpDistance}`, 'accent', true))
         this.handleNode(alternate)
         const endJumpDistance = this.chunk.getCurrentIP() - endJumpIP
         log(new LogData(`Generated alternate clause, jumping to end: ${endJumpDistance}`, 'accent', true))
-        endJumpOpcode.modifyArgs(encodeDWORD(endJumpDistance))
+        endJumpOpcode.modifyArgs(this.encodeDWORD(endJumpDistance))
     } else {
         log('No alternate!')
         log(new LogData(`End of if statement without consequent, jumping to end: ${this.chunk.getCurrentIP() - jumpIP}`, 'accent', true))
-        alternateJumpOpcode.modifyArgs(testResult, encodeDWORD(this.chunk.getCurrentIP() - jumpIP))
+        alternateJumpOpcode.modifyArgs(testResult, this.encodeDWORD(this.chunk.getCurrentIP() - jumpIP))
     }
 }
 

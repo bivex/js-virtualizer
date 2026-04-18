@@ -122,7 +122,7 @@ class BytecodeValue {
         }
     }
 
-    getLoadOpcode() {
+    getLoadOpcode(endian = "BE") {
         let encoded
         switch (this.type) {
             case 'BYTE': {
@@ -134,7 +134,7 @@ class BytecodeValue {
                 break;
             }
             case 'DWORD': {
-                encoded = encodeDWORD(this.value);
+                encoded = encodeDWORD(this.value, endian);
                 break;
             }
             case 'FLOAT': {
@@ -142,7 +142,7 @@ class BytecodeValue {
                 break;
             }
             case 'STRING': {
-                encoded = encodeString(this.value);
+                encoded = encodeString(this.value, endian);
                 break;
             }
         }
@@ -180,19 +180,9 @@ function encodeFloat(float) {
     return data;
 }
 
-let _dwordEndian = "BE";
-
-function setEndian(endian) {
-    _dwordEndian = endian === "LE" ? "LE" : "BE";
-}
-
-function getEndian() {
-    return _dwordEndian;
-}
-
-function encodeDWORD(dword) {
+function encodeDWORD(dword, endian = "BE") {
     const buffer = Buffer.alloc(4);
-    if (_dwordEndian === "LE") {
+    if (endian === "LE") {
         buffer[0] = dword & 0xFF;
         buffer[1] = (dword >> 8) & 0xFF;
         buffer[2] = (dword >> 16) & 0xFF;
@@ -206,7 +196,7 @@ function encodeDWORD(dword) {
     return buffer;
 }
 
-function encodeString(str) {
+function encodeString(str, endian = "BE") {
     const data = Buffer.from(str);
     const encrypted = Buffer.alloc(data.length);
 
@@ -214,10 +204,10 @@ function encodeString(str) {
         encrypted[i] = data[i] ^ ((data.length * 31 + i * 17) & 0xFF);
     }
 
-    return Buffer.concat([encodeDWORD(encrypted.length), encrypted]);
+    return Buffer.concat([encodeDWORD(encrypted.length, endian), encrypted]);
 }
 
-function encodeArray(array, offset) {
+function encodeArray(array, offset, endian = "BE") {
     const length = array.length;
     // register, value
     const references = []
@@ -235,11 +225,11 @@ function encodeArray(array, offset) {
         switch (typeof value) {
             case 'string': {
                 references.push(register);
-                dependencies[register] = encodeString(value);
+                dependencies[register] = encodeString(value, endian);
                 break;
             }
             case 'number': {
-                const encodedValue = Number.isInteger(value) ? encodeDWORD(value) : encodeFloat(value);
+                const encodedValue = Number.isInteger(value) ? encodeDWORD(value, endian) : encodeFloat(value);
                 references.push(register);
                 dependencies[register] = encodedValue;
                 break;
@@ -251,7 +241,7 @@ function encodeArray(array, offset) {
         register++;
     }
 
-    const lengthBuffer = encodeDWORD(length);
+    const lengthBuffer = encodeDWORD(length, endian);
     const data = Buffer.concat(references);
     return {
         encoded: Buffer.concat([lengthBuffer, data]), dependencies
@@ -268,6 +258,5 @@ function encodeArrayRegisters(array) {
 }
 
 module.exports = {
-    Opcode, VMChunk, BytecodeValue, encodeString, encodeFloat, encodeDWORD, encodeArray, encodeArrayRegisters,
-    setEndian, getEndian
+    Opcode, VMChunk, BytecodeValue, encodeString, encodeFloat, encodeDWORD, encodeArray, encodeArrayRegisters
 }

@@ -5,58 +5,58 @@ function randomInt(min, max) {
     return crypto.randomInt(min, max);
 }
 
-function createArithmeticIdentity(rA, rB, rDest) {
+function createArithmeticIdentity(rA, rB, rDest, endian) {
     const val = randomInt(1, 0xFFFF);
     return {
         opcodes: [
-            new Opcode("LOAD_DWORD", rA, encodeDWORD(val)),
-            new Opcode("LOAD_DWORD", rB, encodeDWORD(val)),
+            new Opcode("LOAD_DWORD", rA, encodeDWORD(val, endian)),
+            new Opcode("LOAD_DWORD", rB, encodeDWORD(val, endian)),
             new Opcode("EQ", rDest, rA, rB),
         ],
     };
 }
 
-function createBitwiseComplement(rA, rB, rDest) {
+function createBitwiseComplement(rA, rB, rDest, endian) {
     const val = randomInt(1, 0xFFFF);
     return {
         opcodes: [
-            new Opcode("LOAD_DWORD", rA, encodeDWORD(val)),
+            new Opcode("LOAD_DWORD", rA, encodeDWORD(val, endian)),
             new Opcode("BNOT", rB, rA),
             new Opcode("OR", rDest, rA, rB),
         ],
     };
 }
 
-function createXorSelf(rA, rB, rDest) {
+function createXorSelf(rA, rB, rDest, endian) {
     const val = randomInt(1, 0xFFFF);
     return {
         opcodes: [
-            new Opcode("LOAD_DWORD", rA, encodeDWORD(val)),
-            new Opcode("LOAD_DWORD", rB, encodeDWORD(val)),
+            new Opcode("LOAD_DWORD", rA, encodeDWORD(val, endian)),
+            new Opcode("LOAD_DWORD", rB, encodeDWORD(val, endian)),
             new Opcode("XOR", rDest, rA, rB),
         ],
     };
 }
 
-function createAlgebraicPositive(rA, rB, rC, rDest) {
+function createAlgebraicPositive(rA, rB, rC, rDest, endian) {
     const a = randomInt(1, 50);
     const b = randomInt(1, 50);
     return {
         opcodes: [
-            new Opcode("LOAD_DWORD", rA, encodeDWORD(a)),
-            new Opcode("LOAD_DWORD", rB, encodeDWORD(b)),
+            new Opcode("LOAD_DWORD", rA, encodeDWORD(a, endian)),
+            new Opcode("LOAD_DWORD", rB, encodeDWORD(b, endian)),
             new Opcode("MULTIPLY", rC, rA, rB),
-            new Opcode("LOAD_DWORD", rA, encodeDWORD(0)),
+            new Opcode("LOAD_DWORD", rA, encodeDWORD(0, endian)),
             new Opcode("GREATER_THAN", rDest, rC, rA),
         ],
     };
 }
 
-function createDoubleNegation(rA, rB, rDest) {
+function createDoubleNegation(rA, rB, rDest, endian) {
     const val = randomInt(1, 0xFFFF);
     return {
         opcodes: [
-            new Opcode("LOAD_DWORD", rA, encodeDWORD(val)),
+            new Opcode("LOAD_DWORD", rA, encodeDWORD(val, endian)),
             new Opcode("NOT", rB, rA),
             new Opcode("NOT", rDest, rB),
         ],
@@ -71,16 +71,16 @@ const PREDICATE_GENERATORS = [
     createDoubleNegation,
 ];
 
-function createJunkSequence(registers) {
+function createJunkSequence(registers, endian) {
     const [rA, rB, rC] = registers;
     const val1 = randomInt(100, 0xFFFF);
     const val2 = randomInt(100, 0xFFFF);
     const label = `__opq_${crypto.randomBytes(3).toString("hex")}`;
     return [
-        new Opcode("LOAD_DWORD", rA, encodeDWORD(val1)),
-        new Opcode("LOAD_DWORD", rB, encodeDWORD(val2)),
+        new Opcode("LOAD_DWORD", rA, encodeDWORD(val1, endian)),
+        new Opcode("LOAD_DWORD", rB, encodeDWORD(val2, endian)),
         new Opcode("ADD", rC, rA, rB),
-        new Opcode("LOAD_STRING", rA, encodeString(label)),
+        new Opcode("LOAD_STRING", rA, encodeString(label, endian)),
         new Opcode("NOP"),
     ];
 }
@@ -187,10 +187,10 @@ function insertOpaquePredicates(chunk, opaqueScratch, registerCount, options = {
         if (!isSpecial && !inVfunc && sinceLastInsert >= density && predicatesInserted < maxPredicates) {
             const genIdx = randomInt(0, PREDICATE_GENERATORS.length);
             const gen = PREDICATE_GENERATORS[genIdx];
-            const predicate = gen(rA, rB, rC, rD);
+            const predicate = gen(rA, rB, rC, rD, polyEndian);
 
             // Junk sequence
-            const junk = createJunkSequence(junkRegs);
+            const junk = createJunkSequence(junkRegs, polyEndian);
             const junkBytes = junk.reduce((sum, op) => sum + op.toBytes().length, 0);
 
             // JUMP_UNCONDITIONAL over junk
@@ -200,7 +200,7 @@ function insertOpaquePredicates(chunk, opaqueScratch, registerCount, options = {
             const jumpOffset = junkBytes + 5;
 
             predicate.opcodes.forEach(op => newCode.push(op));
-            newCode.push(new Opcode("JUMP_UNCONDITIONAL", encodeDWORD(jumpOffset)));
+            newCode.push(new Opcode("JUMP_UNCONDITIONAL", encodeDWORD(jumpOffset, polyEndian)));
             junk.forEach(op => newCode.push(op));
 
             predicatesInserted++;

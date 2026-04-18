@@ -14,7 +14,7 @@
  */
 
 const {log} = require("../utils/log");
-const {Opcode, BytecodeValue, encodeDWORD} = require("../utils/assembler");
+const {Opcode, BytecodeValue} = require("../utils/assembler");
 const {binaryOperatorToOpcode, needsCleanup} = require("../utils/constants");
 
 // ALWAYS produces a copy of result, ownership of the copy is passed to the caller
@@ -63,8 +63,8 @@ function resolveAssignmentExpression(node) {
                 log(`Evaluating array destructuring assignment expression`)
                 const counterRegister = this.getAvailableTempLoad()
                 const oneRegister = this.getAvailableTempLoad()
-                this.chunk.append(new Opcode('LOAD_DWORD', counterRegister, encodeDWORD(0)));
-                this.chunk.append(new Opcode('LOAD_DWORD', oneRegister, encodeDWORD(1)));
+                this.chunk.append(new Opcode('LOAD_DWORD', counterRegister, this.encodeDWORD(0)));
+                this.chunk.append(new Opcode('LOAD_DWORD', oneRegister, this.encodeDWORD(1)));
 
                 for (const element of left.elements) {
                     if (element && element.type === 'Identifier') {
@@ -84,7 +84,7 @@ function resolveAssignmentExpression(node) {
                     }
                     const propRegister = this.getAvailableTempLoad()
                     const prop = new BytecodeValue(key.type === 'Identifier' ? key.name : key.value, propRegister)
-                    this.chunk.append(prop.getLoadOpcode())
+                    this.chunk.append(prop.getLoadOpcode(this.endian))
                     this.chunk.append(new Opcode('GET_PROP', this.getVariable(value.name), rightRegister, propRegister))
                     this.freeTempLoad(propRegister)
                 }

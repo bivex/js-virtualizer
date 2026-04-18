@@ -24,14 +24,14 @@ function resolveTemplateLiteral(node) {
     log(`Resolving template literal: ${quasis.map(q => q.value.raw).join(', ')}`)
 
     const outputString = new BytecodeValue('', this.getAvailableTempLoad());
-    this.chunk.append(outputString.getLoadOpcode());
+    this.chunk.append(outputString.getLoadOpcode(this.endian));
     const outputRegister = outputString.register;
 
     for (let i = 0; i < quasis.length; i++) {
         const quasi = quasis[i]
         const quasiRegister = this.getAvailableTempLoad()
         const stringValue = new BytecodeValue(quasi.value.raw, quasiRegister);
-        this.chunk.append(stringValue.getLoadOpcode());
+        this.chunk.append(stringValue.getLoadOpcode(this.endian));
         this.chunk.append(new Opcode('ADD', outputRegister, outputRegister, quasiRegister));
         this.freeTempLoad(quasiRegister)
 
