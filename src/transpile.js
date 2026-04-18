@@ -756,6 +756,7 @@ async function transpile(code, options) {
     options.randomizeVMProfiles = options.randomizeVMProfiles ?? true;
     options.polymorphic = options.polymorphic ?? true;
     options.antiDump = options.antiDump ?? true;
+    options.environmentLock = options.environmentLock ?? null;
     options.vmObfuscationTarget = options.vmObfuscationTarget ?? "node";
     options.transpiledObfuscationTarget = options.transpiledObfuscationTarget ?? "node";
     options.fileName = options.fileName ?? crypto.randomBytes(8).toString('hex')
@@ -1035,6 +1036,16 @@ async function transpile(code, options) {
             ? `VM.enableAntiDump('${antiDumpKey}');`
             : "";
 
+        const environmentCheck = options.environmentLock
+            ? (() => {
+                const {type, expected} = options.environmentLock;
+                if (type === 'hostname') {
+                    return `if (typeof window !== 'undefined' && window.location.hostname !== '${expected.replace(/'/g, "\\'")}') { throw new Error('Environment lock: invalid hostname'); }`;
+                }
+                return '';
+            })()
+            : "";
+
         const virtualizedFunction = functionWrapperTemplate
             .replace("%FN_PREFIX%", node.async ? "async " : "")
             .replace("%FUNCTION_NAME%", node.id.name)
@@ -1047,6 +1058,7 @@ async function transpile(code, options) {
             .replace("%BYTECODE_INTEGRITY_KEY%", integrityKey)
             .replace("%ANTI_DEBUG_SETUP%", `VM.enableAntiDebug('${antiDebugKey}');`)
             .replace("%CFF_STATE_INIT%", cffInit)
+            .replace("%ENVIRONMENT_CHECK%", environmentCheck)
             .replace("%ENCODING%", encoding)
             .replace("%DEPENDENCIES%", JSON.stringify(regToDep).replace(/"/g, ""))
             .replace("%OUTPUT_REGISTER%", generator.outputRegister.toString())
