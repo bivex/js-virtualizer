@@ -56,4 +56,4 @@ function resolveNewExpression(node) {
     return mergeTo
 }
 
-module.exports = resolveNewExpression
+module.exports = resolveNewExpression;

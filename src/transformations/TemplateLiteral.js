@@ -46,4 +46,4 @@ function resolveTemplateLiteral(node) {
     return outputRegister
 }
 
-module.exports = resolveTemplateLiteral
+module.exports = resolveTemplateLiteral;

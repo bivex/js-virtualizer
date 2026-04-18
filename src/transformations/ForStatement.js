@@ -80,4 +80,4 @@ function resolveForStatement(node) {
     this.exitContext('loops')
 }
 
-module.exports = resolveForStatement
+module.exports = resolveForStatement;

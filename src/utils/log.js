@@ -13,7 +13,7 @@
  * Commercial licensing available upon request.
  */
 
-const fs = require("fs");
+const fs = require("node:fs");
 const os = require('os')
 const path = require("node:path");
 

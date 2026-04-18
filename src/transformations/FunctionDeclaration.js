@@ -175,4 +175,4 @@ function resolveFunctionDeclaration(node, options) {
     }
 }
 
-module.exports = resolveFunctionDeclaration
+module.exports = resolveFunctionDeclaration;

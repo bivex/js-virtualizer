@@ -83,4 +83,4 @@ function resolveMemberExpression(node, forceObjectImmutability, forceImmutableMe
     }
 }
 
-module.exports = resolveMemberExpression
+module.exports = resolveMemberExpression;

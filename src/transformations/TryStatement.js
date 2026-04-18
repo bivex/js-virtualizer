@@ -15,7 +15,7 @@
 
 const {log, LogData} = require("../utils/log");
 const {Opcode} = require("../utils/assembler");
-const assert = require("node:assert");
+const assert = require("assert");
 
 // VOID result, all registers are cleaned up before returning
 function resolveTryStatement(node) {
@@ -44,4 +44,4 @@ function resolveTryStatement(node) {
     this.freeTempLoad(errorRegister)
 }
 
-module.exports = resolveTryStatement
+module.exports = resolveTryStatement;

@@ -64,4 +64,4 @@ function resolveCallExpression(node, awaited) {
     return mergeTo
 }
 
-module.exports = resolveCallExpression
+module.exports = resolveCallExpression;

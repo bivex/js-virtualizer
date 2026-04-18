@@ -46,4 +46,4 @@ function resolveObjectExpression(node) {
     return objectRegister
 }
 
-module.exports = resolveObjectExpression
+module.exports = resolveObjectExpression;

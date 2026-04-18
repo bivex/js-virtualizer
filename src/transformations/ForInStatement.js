@@ -77,4 +77,4 @@ function resolveForInStatement(node) {
     this.exitContext('loops')
 }
 
-module.exports = resolveForInStatement
+module.exports = resolveForInStatement;

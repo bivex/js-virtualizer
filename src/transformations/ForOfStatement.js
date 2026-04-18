@@ -76,4 +76,4 @@ function resolveForOfStatement(node) {
     this.exitContext('loops')
 }
 
-module.exports = resolveForOfStatement
+module.exports = resolveForOfStatement;

@@ -39,4 +39,4 @@ function resolveArrayExpression(node) {
     return arrayRegister
 }
 
-module.exports = resolveArrayExpression
+module.exports = resolveArrayExpression;

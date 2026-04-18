@@ -167,4 +167,4 @@ function resolveExpression(expression, options) {
     }
 }
 
-module.exports = resolveExpression
+module.exports = resolveExpression;

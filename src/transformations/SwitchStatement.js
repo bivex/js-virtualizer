@@ -104,4 +104,4 @@ function resolveSwitchStatement(node) {
     this.freeTempLoad(testResultRegister)
 }
 
-module.exports = resolveSwitchStatement
+module.exports = resolveSwitchStatement;

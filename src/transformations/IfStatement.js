@@ -56,4 +56,4 @@ function resolveIfStatement(node) {
     }
 }
 
-module.exports = resolveIfStatement
+module.exports = resolveIfStatement;

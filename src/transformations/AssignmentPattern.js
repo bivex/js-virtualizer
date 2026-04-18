@@ -16,7 +16,7 @@
 const {log} = require("../utils/log");
 const {Opcode} = require("../utils/assembler");
 const {needsCleanup} = require("../utils/constants");
-const assert = require("node:assert");
+const assert = require("assert");
 
 // produces no result, as the result is stored directly in the left-hand side
 function resolveAssignmentPattern(node) {
@@ -35,4 +35,4 @@ function resolveAssignmentPattern(node) {
     return null
 }
 
-module.exports = resolveAssignmentPattern
+module.exports = resolveAssignmentPattern;

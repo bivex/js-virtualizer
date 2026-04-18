@@ -37,4 +37,4 @@ function resolveSpreadElement(node, spreadTo) {
     return outputRegister
 }
 
-module.exports = resolveSpreadElement
+module.exports = resolveSpreadElement;

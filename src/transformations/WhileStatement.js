@@ -69,4 +69,4 @@ function resolveWhileStatement(node) {
     this.exitContext('loops')
 }
 
-module.exports = resolveWhileStatement
+module.exports = resolveWhileStatement;

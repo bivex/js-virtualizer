@@ -63,4 +63,4 @@ function resolveConditionalExpression(node) {
     return outputRegister
 }
 
-module.exports = resolveConditionalExpression
+module.exports = resolveConditionalExpression;
