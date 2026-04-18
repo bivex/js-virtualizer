@@ -149,10 +149,11 @@ function compileCffDispatchInnerBytecode() {
                 bytes.push(op.I_EQ, 2, 0, 1);
 
                 // I_JZ r2, skip ahead to next check (3 bytes: I_LOAD_DWORD for target + I_WRITE_OUTER + I_END = 8 bytes)
+                // I_JZ r2, skip ahead to next check (skip over the match handling code)
+                // Match handling code size: I_LOAD_DWORD (6) + I_WRITE_OUTER (4) + I_END (1) = 11 bytes
                 const jzPos = bytes.length;
                 bytes.push(op.I_JZ, 2, 0x00, 0x00); // offset placeholder
-                // offset will be: bytes to skip = 4 (I_LOAD_DWORD) + 3 (I_WRITE_OUTER) + 1 (I_END) = 8
-                const skipBytes = 4 + 3 + 1;
+                const skipBytes = 6 + 4 + 1; // total bytes to skip
                 const offsetHi = (skipBytes >>> 8) & 0xFF;
                 const offsetLo = skipBytes & 0xFF;
                 bytes[bytes.length - 2] = offsetHi;
