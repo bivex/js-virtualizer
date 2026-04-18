@@ -223,11 +223,9 @@ function insertOpaquePredicates(chunk, opaqueScratch, registerCount, options = {
     }
 
     // Fix up jump offsets in original opcodes
-    let fixupCount = 0;
-    let fixupMiss = 0;
     for (let i = 0; i < newCode.length; i++) {
         const opcode = newCode[i];
-        if (opcode._origByteOffset === undefined) continue; // inserted predicate, skip
+        if (opcode._origByteOffset === undefined) continue;
 
         const info = JUMP_OFFSET_OPCODES[opcode.name];
         if (!info) { delete opcode._origByteOffset; continue; }
@@ -242,10 +240,7 @@ function insertOpaquePredicates(chunk, opaqueScratch, registerCount, options = {
             const oldTargetByte = computeTargetByte(oldCur, oldOffset, formula);
 
             const newTargetByte = origToNewByte.get(oldTargetByte);
-            if (newTargetByte === undefined) {
-                fixupMiss++;
-                continue;
-            }
+            if (newTargetByte === undefined) continue;
 
             let newOffset;
             if (formula === "cur + offset + 2") {
@@ -254,13 +249,9 @@ function insertOpaquePredicates(chunk, opaqueScratch, registerCount, options = {
                 newOffset = newTargetByte - newCur + 1;
             }
             writeDWORD(data, pos, newOffset);
-            fixupCount++;
         }
 
         delete opcode._origByteOffset;
-    }
-    if (fixupMiss > 0) {
-        console.log(`[opaque] offset fixup: ${fixupCount} fixed, ${fixupMiss} missed`);
     }
 
     return chunk;
