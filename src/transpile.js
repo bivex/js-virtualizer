@@ -997,7 +997,8 @@ async function transpile(code, options) {
                 }
                 let cffInitialStateId = 0;
                 if (options.controlFlowFlattening !== false) {
-                    const cffResult = applyControlFlowFlattening(generator.chunk, vmProfile.registerCount - 1, { polyEndian });
+                    const jumpTargetSeed = JSVM.deriveJumpTargetSeed(integrityKey);
+                    const cffResult = applyControlFlowFlattening(generator.chunk, vmProfile.registerCount - 1, { polyEndian, jumpTargetSeed });
                     if (cffResult.chunk) {
                         generator.chunk = cffResult.chunk;
                     }
@@ -1226,7 +1227,7 @@ async function transpile(code, options) {
                 bytes.push(15);
                 return {bytecode: bytes, patchTable: patchTable};
             }`;
-            const buildCffAST = acorn.parse(buildCffCode, {ecmaVersion: "latest"});
+            const buildCffAST = acorn.parse(buildCffCode, {ecmaVersion: "latest", sourceType: "module"});
             vmAST.body.splice(innerVMIdx + 1, 0, ...buildCffAST.body);
 
                 // Replace outer handlers with trampolines in vmAST's implOpcode object
@@ -1287,30 +1288,18 @@ async function transpile(code, options) {
                 const cffHandler = handlerMap.properties.find((p) => p.key && p.key.name === "CFF_DISPATCH");
                 if (cffHandler) {
                     const cffTrampolineSrc = `function() {
-                        var cur = this.read(0);
+                        var cur = this.read(0) - 1;
                         var stateReg = this.readByte();
                         var currentState = this.read(stateReg);
                         var numEntries = this.readDWORD();
-                        var pairs = [];
                         for (var i = 0; i < numEntries; i++) {
                             var entryState = this.readDWORD();
-                            var entryOffset = this.readJumpTargetDWORD();
-                            pairs.push(entryState, cur + entryOffset - 1);
+                            var entryOffset = this.readDWORD();
+                            if (currentState === entryState) {
+                                this.write(0, entryOffset);
+                                return;
+                            }
                         }
-                        if (!this._innerVM) this._innerVM = new InnerVM(this);
-                        var built = InnerVM.buildCffProgram(pairs, 0);
-                        var prog = built.bytecode;
-                        for (var p = 0; p < built.patchTable.length; p++) {
-                            var entry = built.patchTable[p];
-                            var val = pairs[entry.operand];
-                            prog[entry.position] = (val >>> 24) & 0xFF;
-                            prog[entry.position + 1] = (val >>> 16) & 0xFF;
-                            prog[entry.position + 2] = (val >>> 8) & 0xFF;
-                            prog[entry.position + 3] = val & 0xFF;
-                        }
-                        this._innerVM.loadProgram(prog);
-                        this._innerVM.regs[0] = currentState;
-                        this._innerVM.run();
                     }`;
                     cffHandler.value = acorn.parse(`(${cffTrampolineSrc})`, {ecmaVersion: "latest"}).body[0].expression;
                 }

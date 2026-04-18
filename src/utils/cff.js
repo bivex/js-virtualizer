@@ -1,4 +1,14 @@
 const { Opcode, VMChunk, encodeDWORD } = require("./assembler");
+
+function transformJumpTargetBytes(input, position, seed) {
+    const result = new Array(4);
+    for (let i = 0; i < 4; i++) {
+        const pos = position + i;
+        const key = ((seed >>> 0) ^ (pos * 17)) & 0xFF;
+        result[i] = input[i] ^ key;
+    }
+    return result;
+}
 const crypto = require("crypto");
 
 const BLOCK_TERMINATORS = new Set([
@@ -158,6 +168,7 @@ const UNSAFE_OPCODES = new Set([
 
 function applyControlFlowFlattening(chunk, cffStateReg, options = {}) {
     const polyEndian = options.polyEndian || "BE";
+    const jumpTargetSeed = options.jumpTargetSeed;
     const opcodes = chunk.code;
     if (opcodes.length < 4) return { initialStateId: 0 };
 
@@ -409,11 +420,16 @@ function applyControlFlowFlattening(chunk, cffStateReg, options = {}) {
         const blockIdx = blockIndices[i];
         const stateId = stateIds.get(blockIdx);
         const blockOffset = shuffledBlockOffsets.get(blockIdx);
-        const cur = dispatchByteOffset + 1;
-        const offset = blockOffset - cur + 1;
+        const offset = blockOffset;
         const entryBase = 5 + i * 8;
+        const entryOffsetPosition = entryBase + 4;
         dispatchData[writeU32](stateId, entryBase);
-        dispatchData[writeI32](offset, entryBase + 4);
+        let offsetBytes = Buffer.alloc(4);
+        offsetBytes[writeI32](offset, 0);
+        if (jumpTargetSeed) {
+            offsetBytes = Buffer.from(transformJumpTargetBytes([...offsetBytes], entryOffsetPosition, jumpTargetSeed));
+        }
+        dispatchData.set(offsetBytes, entryOffsetPosition);
     }
 
     // Now patch all "JUMP_UNCONDITIONAL dispatch" instructions to point to the dispatch opcode
