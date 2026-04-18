@@ -1199,6 +1199,38 @@ async function transpile(code, options) {
             };`;
             const decryptAST = acorn.parse(decryptCode, {ecmaVersion: "latest", sourceType: "module"});
             vmAST.body.splice(innerVMIdx + 1, 0, ...decryptAST.body);
+
+            // Add CFF dispatch program builder to InnerVM
+            // Uses numeric opcode constants directly (no external dependencies)
+            const buildCffCode = `InnerVM.buildCffProgram = function(pairs, ipRegIndex) {
+                var bytes = [];
+                var patchTable = [];
+                // I_LOAD_DWORD(1) r0, {currentState placeholder}
+                bytes.push(1, 0, 0, 0, 0, 0);
+                patchTable.push({position: 2, operand: 0});
+                var numEntries = pairs.length / 2;
+                for (var i = 0; i < numEntries; i++) {
+                    // I_LOAD_DWORD(1) r1, {entryState placeholder}
+                    bytes.push(1, 1, 0, 0, 0, 0);
+                    patchTable.push({position: bytes.length - 4, operand: 1 + i * 2});
+                    // I_EQ(9) r2, r0, r1
+                    bytes.push(9, 2, 0, 1);
+                    // I_JZ(10) r2, skip over match handling (10 bytes: LOAD_DWORD(6) + WRITE_OUTER(3) + END(1))
+                    bytes.push(10, 2, 0, 10);
+                    // I_LOAD_DWORD(1) r3, {targetIP placeholder}
+                    bytes.push(1, 3, 0, 0, 0, 0);
+                    patchTable.push({position: bytes.length - 4, operand: 1 + i * 2 + 1});
+                    // I_WRITE_OUTER(3) {ipRegIndex}, r3
+                    bytes.push(3, ipRegIndex & 0xFF, 3);
+                    // I_END(15)
+                    bytes.push(15);
+                }
+                // Final I_END(15) — no match found
+                bytes.push(15);
+                return {bytecode: bytes, patchTable: patchTable};
+            };`;
+            const buildCffAST = acorn.parse(buildCffCode, {ecmaVersion: "latest", sourceType: "module"});
+            vmAST.body.splice(innerVMIdx + 1, 0, ...buildCffAST.body);
         }
 
         // Replace outer handlers with trampolines in vmAST's implOpcode object
@@ -1259,16 +1291,38 @@ async function transpile(code, options) {
                 }
 
                 // Replace CFF_DISPATCH handler with trampoline
-                // CFF_DISPATCH is more complex — it needs dynamic inner bytecode.
-                // For MVP, we keep CFF_DISPATCH as a concrete handler but wrap it
-                // in a light obfuscation layer (delegate to a function that has
-                // the same logic but with renamed variables).
                 const cffHandler = handlerMap.properties.find((p) => p.key && p.key.name === "CFF_DISPATCH");
                 if (cffHandler) {
-                    // Keep CFF_DISPATCH concrete for now — dynamic bytecode building
-                    // in the trampoline adds too much overhead. The handler is already
-                    // protected by polymorphic VM + obfuscation + CFF itself.
-                    // Will be enhanced in Phase 2.
+                    const cffTrampolineSrc = `function() {
+                        var cur = this.read(0);
+                        var stateReg = this.readByte();
+                        var currentState = this.read(stateReg);
+                        var numEntries = this.readDWORD();
+                        var pairs = [];
+                        for (var i = 0; i < numEntries; i++) {
+                            var entryState = this.readDWORD();
+                            var entryOffset = this.readJumpTargetDWORD();
+                            pairs.push(entryState, cur + entryOffset - 1);
+                        }
+                        if (!this._innerVM) this._innerVM = new InnerVM(this);
+                        var built = InnerVM.buildCffProgram(pairs, 0);
+                        var prog = built.bytecode;
+                        for (var p = 0; p < built.patchTable.length; p++) {
+                            var entry = built.patchTable[p];
+                            var val = pairs[entry.operand];
+                            prog[entry.position] = (val >>> 24) & 0xFF;
+                            prog[entry.position + 1] = (val >>> 16) & 0xFF;
+                            prog[entry.position + 2] = (val >>> 8) & 0xFF;
+                            prog[entry.position + 3] = val & 0xFF;
+                        }
+                        for (var k = 0; k < prog.length; k++) {
+                            prog[k] = prog[k] ^ ((${nestedKey >>> 0} ^ ((k * 17) | 0)) & 0xFF);
+                        }
+                        this._innerVM.loadProgram(prog);
+                        this._innerVM.regs[0] = currentState;
+                        this._innerVM.run();
+                    }`;
+                    cffHandler.value = acorn.parse(`(${cffTrampolineSrc})`, {ecmaVersion: "latest"}).body[0].expression;
                 }
             }
         }
