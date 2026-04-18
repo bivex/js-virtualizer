@@ -13,80 +13,54 @@
  * Commercial licensing available upon request.
  */
 
-const {registers, opcodes, opNames, registerNames, reservedNames} = require("./utils/constants");
-const implOpcode = require("./utils/opcodes");
+const vmCommon = require("./utils/vmCommon");
+const {
+    BYTECODE_INTEGRITY_PREFIX,
+    BYTECODE_ENCRYPTED_PREFIX,
+    bytecodeKeyRegistry,
+    registers,
+    opcodes,
+    opNames,
+    registerNames,
+    reservedNames,
+    implOpcode,
+    rotateLeft,
+    createBytecodeIntegrityDigest,
+    createSeedFromString,
+    createSeededPermutation,
+    encodeStatefulOpcode,
+    decodeStatefulOpcode,
+    deriveOpcodeStateSeed,
+    deriveJumpTargetSeed,
+    deriveRuntimeDispatchSeed,
+    deriveAntiDebugSeed,
+    deriveInstructionByteSeed,
+    createOpcodePositionMask,
+    createJumpTargetByteMask,
+    createInstructionByteMask,
+    isBase64Like,
+    normalizeEnvelopeFlags,
+    clampInteger,
+    interleaveDispatchDecoys,
+    buildDispatchEntries,
+    deriveAliasIndex,
+    mixRuntimeOpcodeState,
+    resolveRegisteredBytecodeKey,
+    createAntiDebugState,
+    cloneAntiDebugState,
+    createMemoryProtectionState,
+    createRegisterProtectionMask,
+    createProtectedRegisterValue,
+    createRegisterReference,
+    restoreProtectedRegisterValue,
+    DEFAULT_VM_PROFILE,
+    normalizeVMProfile
+} = vmCommon;
+
 const {log, LogData} = require("./utils/log");
 const zlib = require("node:zlib");
 
-const BYTECODE_INTEGRITY_PREFIX = "JSCI1";
-const BYTECODE_ENCRYPTED_PREFIX = "JSCX1";
-const bytecodeKeyRegistry = new Map();
-
-function rotateLeft(value, shift) {
-    return ((value << shift) | (value >>> (32 - shift))) >>> 0;
-}
-
-function createBytecodeIntegrityDigest(payload, salt, key, format) {
-    const normalizedPayload = String(payload ?? "");
-    const normalizedSalt = String(salt ?? "");
-    const normalizedKey = String(key ?? "");
-    const normalizedFormat = String(format ?? "");
-    const seed = `${normalizedSalt}:${normalizedFormat}:${normalizedPayload.length}:${normalizedKey.length}`;
-    const input = `${seed}:${normalizedPayload}`;
-    let a = (0x243f6a88 ^ input.length) >>> 0;
-    let b = (0x85a308d3 ^ normalizedSalt.length) >>> 0;
-    let c = (0x13198a2e ^ normalizedFormat.length) >>> 0;
-    let d = (0x03707344 ^ normalizedKey.length) >>> 0;
-
-    for (let i = 0; i < input.length; i++) {
-        const code = input.charCodeAt(i);
-        const keyCode = normalizedKey.length > 0 ? normalizedKey.charCodeAt(i % normalizedKey.length) : 0;
-        const saltCode = normalizedSalt.length > 0 ? normalizedSalt.charCodeAt(i % normalizedSalt.length) : 0;
-        a = Math.imul((a ^ (code + keyCode + i)) >>> 0, 0x45d9f3b) >>> 0;
-        b = rotateLeft((b + code + saltCode + i) >>> 0, 5);
-        b = Math.imul((b ^ a) >>> 0, 0x27d4eb2d) >>> 0;
-        c = rotateLeft((c ^ (b + code + keyCode)) >>> 0, 11);
-        c = Math.imul(c >>> 0, 0x165667b1) >>> 0;
-        d = rotateLeft((d + (code ^ c) + saltCode) >>> 0, 17);
-        d = Math.imul((d ^ a ^ keyCode) >>> 0, 0x9e3779b1) >>> 0;
-    }
-
-    a ^= b >>> 1;
-    b ^= c >>> 3;
-    c ^= d >>> 5;
-    d ^= a >>> 7;
-
-    return [a, b, c, d]
-        .map((part) => (part >>> 0).toString(16).padStart(8, "0"))
-        .join("");
-}
-
-function createSeedFromString(input, initial = 0x9e3779b9) {
-    const normalizedInput = String(input ?? "");
-    let seed = initial >>> 0;
-
-    for (let i = 0; i < normalizedInput.length; i++) {
-        seed = Math.imul((seed ^ normalizedInput.charCodeAt(i) ^ i) >>> 0, 0x45d9f3b) >>> 0;
-        seed = rotateLeft(seed, 7);
-    }
-
-    return seed >>> 0;
-}
-
-function createSeededPermutation(length, seed) {
-    const permutation = Array.from({length}, (_, index) => index);
-    let state = (seed >>> 0) || 0x9e3779b9;
-
-    for (let index = permutation.length - 1; index > 0; index--) {
-        state = Math.imul((state ^ (state >>> 15)) >>> 0, 0x2c1b3c6d) >>> 0;
-        state = (state + 0x9e3779b9 + index) >>> 0;
-        const swapIndex = state % (index + 1);
-        [permutation[index], permutation[swapIndex]] = [permutation[swapIndex], permutation[index]];
-    }
-
-    return permutation;
-}
-
+// Node-specific: Buffer-based cipher (vm_dist uses Uint8Array variant)
 function createBytecodeCipherBuffer(input, key, salt) {
     const normalizedKey = String(key ?? "");
     if (!normalizedKey) {
@@ -114,40 +88,7 @@ function createBytecodeCipherBuffer(input, key, salt) {
     return output;
 }
 
-function deriveOpcodeStateSeed(key) {
-    return createSeedFromString(`opcode:${String(key ?? "")}`, 0x6d2b79f5) || 0x6d2b79f5;
-}
-
-function deriveJumpTargetSeed(key) {
-    return createSeedFromString(`jump:${String(key ?? "")}`, 0x1f123bb5) || 0x1f123bb5;
-}
-
-function deriveRuntimeDispatchSeed(key) {
-    return createSeedFromString(`dispatch:${String(key ?? "")}`, 0x4f1bbcdc) || 0x4f1bbcdc;
-}
-
-function deriveAntiDebugSeed(key) {
-    return createSeedFromString(`anti-debug:${String(key ?? "")}`, 0x7f4a7c15) || 0x7f4a7c15;
-}
-
-function deriveInstructionByteSeed(key) {
-    return createSeedFromString(`instruction:${String(key ?? "")}`, 0x2e5aa50d) || 0x2e5aa50d;
-}
-
-function createOpcodePositionMask(seed, position) {
-    let state = (seed ^ Math.imul((position + 1) >>> 0, 0x9e3779b1)) >>> 0;
-    state = rotateLeft(state, position % 23 + 5);
-    state ^= state >>> 16;
-    return state & 0xFF;
-}
-
-function createJumpTargetByteMask(seed, position) {
-    let state = (seed ^ Math.imul((position + 1) >>> 0, 0x27d4eb2d)) >>> 0;
-    state = rotateLeft(state, position % 19 + 3);
-    state ^= state >>> 15;
-    return state & 0xFF;
-}
-
+// Node-specific: Buffer-based transforms
 function transformJumpTargetBytes(input, position, seed) {
     const data = Buffer.isBuffer(input) ? Buffer.from(input) : Buffer.from(input);
 
@@ -156,13 +97,6 @@ function transformJumpTargetBytes(input, position, seed) {
     }
 
     return data;
-}
-
-function createInstructionByteMask(seed, instructionPosition, bytePosition) {
-    let state = (seed ^ Math.imul((instructionPosition + 1) >>> 0, 0x6d2b79f5) ^ Math.imul((bytePosition + 1) >>> 0, 0x45d9f3b)) >>> 0;
-    state = rotateLeft(state, (instructionPosition + bytePosition) % 17 + 7);
-    state ^= state >>> 13;
-    return state & 0xFF;
 }
 
 function transformInstructionBytes(input, instructionPosition, seed) {
@@ -175,163 +109,7 @@ function transformInstructionBytes(input, instructionPosition, seed) {
     return data;
 }
 
-function encodeStatefulOpcode(opcode, position, seed) {
-    return (opcode ^ createOpcodePositionMask(seed >>> 0, position >>> 0)) & 0xFF;
-}
-
-function decodeStatefulOpcode(opcode, position, seed) {
-    return encodeStatefulOpcode(opcode, position, seed);
-}
-
-function isBase64Like(value) {
-    return typeof value === "string" && /^[A-Za-z0-9+/=]+$/.test(value);
-}
-
-function normalizeEnvelopeFlags(flags) {
-    const normalizedFlags = new Set(String(flags ?? "S").split("").filter((flag) => /^[A-Z]$/.test(flag)));
-    if (!normalizedFlags.has("S")) {
-        normalizedFlags.add("S");
-    }
-    return Array.from(normalizedFlags).sort().join("");
-}
-
-const DISPATCHER_VARIANTS = new Set(["permuted", "clustered", "striped"]);
-const RUNTIME_OPCODE_DERIVATION_MODES = new Set(["hybrid", "stateful", "position"]);
-const DEFAULT_VM_PROFILE = Object.freeze({
-    profileId: "classic",
-    registerCount: 256,
-    dispatcherVariant: "permuted",
-    aliasBaseCount: 2,
-    aliasJitter: 1,
-    decoyCount: Math.max(8, Math.ceil(opNames.length / 4)),
-    decoyStride: 3,
-    runtimeOpcodeDerivation: "hybrid",
-    polyEndian: "BE"
-});
-
-function clampInteger(value, min, max, fallback) {
-    if (!Number.isInteger(value)) {
-        return fallback;
-    }
-    return Math.max(min, Math.min(max, value));
-}
-
-function normalizeVMProfile(profile = {}) {
-    const normalized = {
-        ...DEFAULT_VM_PROFILE,
-        ...profile
-    };
-
-    normalized.profileId = String(profile.profileId ?? DEFAULT_VM_PROFILE.profileId);
-    normalized.registerCount = clampInteger(profile.registerCount, registerNames.length + 1, 256, DEFAULT_VM_PROFILE.registerCount);
-    normalized.dispatcherVariant = DISPATCHER_VARIANTS.has(profile.dispatcherVariant)
-        ? profile.dispatcherVariant
-        : DEFAULT_VM_PROFILE.dispatcherVariant;
-    normalized.aliasBaseCount = clampInteger(profile.aliasBaseCount, 1, 4, DEFAULT_VM_PROFILE.aliasBaseCount);
-    normalized.aliasJitter = clampInteger(profile.aliasJitter, 0, 3, DEFAULT_VM_PROFILE.aliasJitter);
-    normalized.decoyCount = clampInteger(profile.decoyCount, 0, 64, DEFAULT_VM_PROFILE.decoyCount);
-    normalized.decoyStride = clampInteger(profile.decoyStride, 1, 8, DEFAULT_VM_PROFILE.decoyStride);
-    normalized.runtimeOpcodeDerivation = RUNTIME_OPCODE_DERIVATION_MODES.has(profile.runtimeOpcodeDerivation)
-        ? profile.runtimeOpcodeDerivation
-        : DEFAULT_VM_PROFILE.runtimeOpcodeDerivation;
-    normalized.polyEndian = (profile.polyEndian === "LE" || profile.polyEndian === "BE")
-        ? profile.polyEndian
-        : DEFAULT_VM_PROFILE.polyEndian || "BE";
-    return normalized;
-}
-
-function interleaveDispatchDecoys(entries, decoys, stride) {
-    const result = [];
-    let realCount = 0;
-    const normalizedStride = Math.max(1, stride || 1);
-
-    for (const entry of entries) {
-        result.push(entry);
-        if (entry.kind !== "real") {
-            continue;
-        }
-        realCount += 1;
-        if (decoys.length > 0 && realCount >= normalizedStride) {
-            result.push(decoys.shift());
-            realCount = 0;
-        }
-    }
-
-    return result.concat(decoys);
-}
-
-function buildDispatchEntries(realEntries, realGroups, decoyEntries, profile, seed) {
-    switch (profile.dispatcherVariant) {
-        case "clustered":
-            return interleaveDispatchDecoys(realEntries.slice(), decoyEntries.slice(), profile.decoyStride);
-        case "striped": {
-            const striped = [];
-            const groups = realGroups.map((group) => group.slice());
-            let hasEntries = true;
-
-            while (hasEntries) {
-                hasEntries = false;
-                for (const group of groups) {
-                    if (group.length === 0) {
-                        continue;
-                    }
-                    striped.push(group.shift());
-                    hasEntries = true;
-                }
-            }
-
-            return interleaveDispatchDecoys(striped, decoyEntries.slice(), profile.decoyStride);
-        }
-        default: {
-            const entries = [...realEntries, ...decoyEntries];
-            const entryOrder = createSeededPermutation(entries.length, seed ^ 0x7f4a7c15);
-            return entryOrder.map((index) => entries[index]);
-        }
-    }
-}
-
-function deriveAliasIndex(profile, slotsLength, opcode, position, runtimeState, runtimeDispatchSeed) {
-    if (slotsLength <= 1) {
-        return 0;
-    }
-
-    switch (profile.runtimeOpcodeDerivation) {
-        case "position":
-            return createOpcodePositionMask(runtimeDispatchSeed || 0x4f1bbcdc, (position ^ opcode) >>> 0) % slotsLength;
-        case "stateful":
-            return createOpcodePositionMask(runtimeState || runtimeDispatchSeed || 0x4f1bbcdc, opcode) % slotsLength;
-        default: {
-            const mixedState = (runtimeState || runtimeDispatchSeed || 0x4f1bbcdc) ^ rotateLeft((position + 1) >>> 0, opcode % 13 + 3);
-            return createOpcodePositionMask(mixedState >>> 0, (position ^ opcode) >>> 0) % slotsLength;
-        }
-    }
-}
-
-function mixRuntimeOpcodeState(state, opcode, position, salt = 0) {
-    let next = (state ^ Math.imul((opcode + 1) >>> 0, 0x45d9f3b) ^ Math.imul((position + 1) >>> 0, 0x165667b1) ^ salt) >>> 0;
-    next = rotateLeft(next, opcode % 19 + 5);
-    next = Math.imul((next ^ (next >>> 16)) >>> 0, 0x27d4eb2d) >>> 0;
-    return next || 0x9e3779b9;
-}
-
-function resolveRegisteredBytecodeKey(keyId) {
-    const normalizedKeyId = String(keyId ?? "");
-
-    if (bytecodeKeyRegistry.has(normalizedKeyId)) {
-        return bytecodeKeyRegistry.get(normalizedKeyId);
-    }
-
-    if (typeof globalThis !== "undefined" && globalThis.__JSV_BYTECODE_KEYS && normalizedKeyId in globalThis.__JSV_BYTECODE_KEYS) {
-        return String(globalThis.__JSV_BYTECODE_KEYS[normalizedKeyId]);
-    }
-
-    if (typeof process !== "undefined" && process.env && process.env[normalizedKeyId]) {
-        return String(process.env[normalizedKeyId]);
-    }
-
-    throw new Error("VM decryption key not available");
-}
-
+// Node-specific: Buffer-based envelope unpacking
 function unpackBytecodeEnvelope(code, format, key) {
     if (typeof code !== "string") {
         return {
@@ -410,103 +188,6 @@ function unpackBytecodeEnvelope(code, format, key) {
         statefulOpcodes: false,
         jumpTargetEncoding: false,
         perInstructionEncoding: false
-    };
-}
-
-function createAntiDebugState(key) {
-    return {
-        enabled: true,
-        key: String(key ?? ""),
-        seed: deriveAntiDebugSeed(key),
-        suspicionScore: 0,
-        appliedSuspicion: 0,
-        instructionCount: 0,
-        lastStepAt: 0,
-        pauseThresholdMs: 1200,
-        sampleInterval: 64,
-        devtoolsThreshold: 160,
-        disruptionCount: 0
-    };
-}
-
-function cloneAntiDebugState(state) {
-    if (!state) {
-        return null;
-    }
-
-    return {
-        ...state,
-        lastStepAt: 0
-    };
-}
-
-function createMemoryProtectionState(key, numProtected) {
-    const normalizedKey = String(key ?? "");
-    let seed = 0x9e3779b9;
-
-    for (let i = 0; i < normalizedKey.length; i++) {
-        seed = Math.imul((seed ^ normalizedKey.charCodeAt(i)) >>> 0, 0x45d9f3b) >>> 0;
-    }
-
-    return {
-        enabled: true,
-        seed,
-        heap: new Map(),
-        nextToken: 1,
-        laneEpoch: 0
-    };
-}
-
-function createRegisterProtectionMask(seed, register) {
-    return rotateLeft((seed ^ Math.imul(register + 1, 0x9e3779b1)) >>> 0, register % 29 + 3);
-}
-
-function createProtectedRegisterValue(state, register, value) {
-    state.laneEpoch = (state.laneEpoch + 1) >>> 0;
-    const token = state.nextToken = (state.nextToken + 1) >>> 0;
-    state.heap.set(token, value);
-
-    const laneSeed = (state.seed ^ Math.imul(state.laneEpoch, 0x9e3779b1)) >>> 0;
-    const maskedToken = (token ^ createRegisterProtectionMask(laneSeed, register)) >>> 0;
-    const guard = rotateLeft((maskedToken ^ laneSeed ^ register) >>> 0, 11);
-
-    return {
-        __jsvmProtected: true,
-        token: maskedToken,
-        guard,
-        laneEpoch: state.laneEpoch
-    };
-}
-
-function restoreProtectedRegisterValue(state, register, value, options = {}) {
-    if (!value || value.__jsvmProtected !== true) {
-        return value;
-    }
-
-    const laneEpoch = value.laneEpoch >>> 0;
-    const laneSeed = (state.seed ^ Math.imul(laneEpoch, 0x9e3779b1)) >>> 0;
-    const expectedGuard = rotateLeft((value.token ^ laneSeed ^ register) >>> 0, 11);
-    if (value.guard !== expectedGuard) {
-        throw new Error("VM register protection check failed");
-    }
-
-    const token = (value.token ^ createRegisterProtectionMask(laneSeed, register)) >>> 0;
-    if (!state.heap.has(token)) {
-        throw new Error("VM register protection token missing");
-    }
-
-    const resolvedValue = state.heap.get(token);
-
-    if (options.consume) {
-        state.heap.delete(token);
-    }
-
-    return resolvedValue;
-}
-
-function createRegisterReference(value) {
-    return {
-        value
     };
 }
 
