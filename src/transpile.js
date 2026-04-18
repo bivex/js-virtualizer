@@ -710,21 +710,23 @@ function getJumpEncodingOffsets(opcodeName, opcodeData, polyEndian = "BE") {
     }
 }
 
-function applyStatefulOpcodeEncoding(chunk, seed) {
+function iterateOpcodes(chunk, callback) {
     let position = 0;
-
     for (const opcode of chunk.code) {
-        opcode.opcode = Buffer.from([JSVM.encodeStatefulOpcode(opcode.opcode[0], position, seed)]);
+        callback(opcode, position);
         position += opcode.toBytes().length;
     }
 }
 
+function applyStatefulOpcodeEncoding(chunk, seed) {
+    iterateOpcodes(chunk, (opcode, position) => {
+        opcode.opcode = Buffer.from([JSVM.encodeStatefulOpcode(opcode.opcode[0], position, seed)]);
+    });
+}
+
 function applyJumpTargetEncoding(chunk, seed, polyEndian = "BE") {
-    let position = 0;
-
-    for (const opcode of chunk.code) {
+    iterateOpcodes(chunk, (opcode, position) => {
         const offsets = getJumpEncodingOffsets(opcode.name, opcode.data, polyEndian);
-
         if (offsets.length > 0) {
             opcode.data = Buffer.from(opcode.data);
             for (const offset of offsets) {
@@ -732,20 +734,15 @@ function applyJumpTargetEncoding(chunk, seed, polyEndian = "BE") {
                 encoded.copy(opcode.data, offset);
             }
         }
-
-        position += opcode.toBytes().length;
-    }
+    });
 }
 
 function applyPerInstructionEncoding(chunk, seed) {
-    let position = 0;
-
-    for (const opcode of chunk.code) {
+    iterateOpcodes(chunk, (opcode, position) => {
         if (opcode.data.length > 0) {
             opcode.data = JSVM.encodeInstructionBytes(opcode.data, position, seed);
         }
-        position += opcode.toBytes().length;
-    }
+    });
 }
 
 async function transpile(code, options) {
