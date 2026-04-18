@@ -730,6 +730,19 @@ class FunctionBytecodeGenerator {
         }
     }
 
+    buildArrayFromItems(items, itemSetupFn) {
+        const counterRegister = this.getAvailableTempLoad()
+        const oneRegister = this.getAvailableTempLoad()
+        this.chunk.append(new Opcode('LOAD_DWORD', counterRegister, this.encodeDWORD(0)))
+        this.chunk.append(new Opcode('LOAD_DWORD', oneRegister, this.encodeDWORD(1)))
+        items.forEach((item, idx) => {
+            itemSetupFn(item, counterRegister, idx)
+            this.chunk.append(new Opcode('ADD', counterRegister, counterRegister, oneRegister))
+        })
+        this.freeTempLoad(counterRegister)
+        this.freeTempLoad(oneRegister)
+    }
+
     getBytecode() {
         log(`\nResulting Bytecode:\n\n${this.chunk.toString()}`)
         return this.chunk.toBytes();
