@@ -492,7 +492,7 @@ function restoreProtectedRegisterValue(state, register, value, options = {}) {
 
     const token = (value.token ^ createRegisterProtectionMask(laneSeed, register)) >>> 0;
     if (!state.heap.has(token)) {
-        throw new Error("VM register protection token missing");
+        throw new Error(`VM register protection token missing: reg=${register} token=${token} laneEpoch=${laneEpoch} heapSize=${state.heap.size} nextToken=${state.nextToken} consume=${options.consume}`);
     }
 
     const resolvedValue = state.heap.get(token);
