@@ -99,6 +99,7 @@ async function main() {
     const result = await transpile(sampleCode, {
         fileName: "browser-fingerprint-demo.js",
         writeOutput: false,
+        codeInterleaving: true,
         passes: ["RemoveUnused", "ObfuscateVM", "ObfuscateTranspiled"],
         vmObfuscationTarget: "browser",
         transpiledObfuscationTarget: "browser"
