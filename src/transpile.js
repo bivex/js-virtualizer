@@ -1157,6 +1157,7 @@ async function transpile(code, options) {
         }
     }
 
+    console.log("Starting walk...");
     const virtualizeNodes = [];
     walk.simple(ast, {
         FunctionDeclaration(node) {
@@ -1168,6 +1169,7 @@ async function transpile(code, options) {
 
     // Code Interleaving: merge multiple functions into one bytecode blob
     if (options.codeInterleaving && virtualizeNodes.length >= 2) {
+        console.log(`Found ${virtualizeNodes.length} virtualized nodes. Starting interleaving...`);
         const sharedConfig = {
             integrityKey: crypto.randomBytes(16).toString("hex"),
             bytecodeKeyId: `JSVK_${crypto.randomBytes(6).toString("hex")}`,
@@ -1195,6 +1197,7 @@ async function transpile(code, options) {
             const unifiedRegisterCount = Math.max(...ilvEntries.map(e => e.vmProfile.registerCount));
 
             // Merge chunks
+            console.log("Interleaving chunks...");
             const {mergedChunk, selectorReg} = interleaveChunks(
                 ilvEntries.map(e => ({chunk: e.chunk})),
                 unifiedRegisterCount,
@@ -1208,6 +1211,7 @@ async function transpile(code, options) {
             }
 
             // Apply CFF on merged chunk
+            console.log("Applying CFF on merged chunk...");
             let cffInitState = 0;
             if (options.controlFlowFlattening !== false) {
                 const jumpTargetSeed = JSVM.deriveJumpTargetSeed(sharedConfig.integrityKey);
@@ -1229,6 +1233,7 @@ async function transpile(code, options) {
             }
 
             // Encode merged chunk
+            console.log("Encoding merged chunk...");
             const opcodeSeed = JSVM.deriveOpcodeStateSeed(sharedConfig.integrityKey);
             const jumpSeed = JSVM.deriveJumpTargetSeed(sharedConfig.integrityKey);
             const instructionSeed = JSVM.deriveInstructionByteSeed(sharedConfig.integrityKey);
@@ -1317,6 +1322,7 @@ async function transpile(code, options) {
                 if (rewriteQueue[i]._interleaved) rewriteQueue.splice(i, 1);
             }
 
+            console.log("Interleaving complete.");
             log(new LogData(`Interleaved ${ilvEntries.length} functions into one bytecode blob (${unifiedRegisterCount} regs)`, 'success', false));
         }
     } else {
@@ -1553,13 +1559,13 @@ async function transpile(code, options) {
         accompanyingVM = `${accompanyingVM}\n${rewriteQueue._interleavedKeyRegistrations}\n`;
     }
 
-    let transpiledResult = escodegen.generate(ast);
-
     // Inject interleaved setup code into AST (after requireInject at index 0)
     if (rewriteQueue._interleavedSetup) {
         const setupAST = acorn.parse(rewriteQueue._interleavedSetup, {ecmaVersion: "latest", sourceType: "module"});
         ast.body.splice(1, 0, ...setupAST.body);
     }
+
+    let transpiledResult = escodegen.generate(ast);
 
     if (options.passes.has("ObfuscateVM")) {
         accompanyingVM = await obfuscateCode(accompanyingVM, {
