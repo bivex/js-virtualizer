@@ -1,61 +1,61 @@
 const __JSV_RUNTIME = typeof globalThis !== 'undefined' && globalThis.JSVM ? globalThis.JSVM : typeof require === 'function' ? require('./test_cff.vm.js') : null;
 function add(a, b) {
-    const __jsv_arg_93583c8b = b;
-    const __jsv_arg_d009eab2 = a;
+    const __jsv_arg_84e9bcb6 = a;
+    const __jsv_arg_412b5e02 = b;
     const VM = new __JSV_RUNTIME({
-        'profileId': 'vm_0762ae25b3',
+        'profileId': 'vm_f8e548145d',
         'registerCount': 192,
-        'dispatcherVariant': 'striped',
+        'dispatcherVariant': 'clustered',
         'aliasBaseCount': 3,
         'aliasJitter': 2,
-        'decoyCount': 48,
-        'decoyStride': 2,
+        'decoyCount': 47,
+        'decoyStride': 1,
         'runtimeOpcodeDerivation': 'stateful',
-        'polyEndian': 'BE'
+        'polyEndian': 'LE'
     });
-    VM.enableMemoryProtection('f0f3cb21612c086dc8cfdf9849e6fb35');
-    VM.setBytecodeIntegrityKey('27472f56ae5af91581a6d0f642df5a63');
-    VM.enableAntiDebug('c9b3681afb454fdd104dbc4fa941b5fa');
-    VM.enableSelfModifyingBytecode('a5af99a5be7ea035618aa432eab7a87d');
-    VM.enableAntiDump('2d7ccf66d2102ba307c1eb925df55c7c');
-    VM.write(191, 1399613555);
-    VM.loadFromString('JSCX1:ef6509aaa4d6003e:JSVK_cc5b8cf4c2d8:IJS:d3d11dbc4c4b6da9283beab7d60c05ff:Tn60MFkzZgzucqgmlnu/eLD38QiI5+1SwafMg0ffpZqUm8m0BVOMdOtN6aIDrcDXYD+L9EqlHheKMGT5Nhf2M6rhiSQkJretxV/mHVgmkbzPbFG3kcIo0bvBq2b+eE/sh5hVkpOuzSma/X5mHy4hE86fB2o/5X30VM932dVULqptvWha2+RHse1Eybo2KIjLT2W0rWd/O7uF9TZ5kDdzwJ/mK6sVtdBuWdcisNp+EOWBwWGpbRTiPz+8KZndSiQNkW3U+ZmCAN5jfGt0hvDMW/vmQEp9i2cd012nv6fXSiZpxnsvvKi1YZJfkDibMIilatL87E/fVH0LvtNJMQMZVwkZ1xBAfdPsecSr7qrPf7cWYVEK/GNqXjSQiPMX0c5W3RBXrJC4lUBBx5SvJmx2vsgrmC63dGtLsX7wTZGxsaU20TuyuVj611doQJL3/F/McNigZGLZPAwK/X62xAE5OsPdcvSmAV1RtZjr9CdDy5VvIVERvtXlzlVmlkD1mJp7B0ExSmInx3kDBCsEiaOq5PsIrTjjSiyfOvvF1vmJm0WE/AzB73lTf94n9YOieM5th6gEFSbmSz00Yt0WgMjt/4cTGFOQPRdUBDoYdJPRx1rnbPQj3JE/OMeCOi4oJk4g10yZIj6gdEd8MrVeaZYocFRpkcELS1c856EUfQpD3rmdTNuhWLLlCgJ36CxRzrfOBUxfR9EqSrRsZIijj1ldo8dLoW1B7toqIUlWewkClAoHVfhaUDbn7JZVDAAKDlzOo4CQccXFaqzadsuOpv795u2JZTiUNl9eki8vifc89qORS6bRvcn7EDXnsUhIbArAAZhBkkjveKMB3jDinXWMyjBSR/XYObLPwhCOU3SVwKCnhKxt/mnmn3y3SW9O2et+tl2aAJidpLw0HhJoscp01EHV7FG+DLRP040gSOJHFxUy+oZM90o1qH4+8iCH93ZXMots/wzWQCT48cNFKNNGJ7ekoL7PK1yIG6bfEwntSoabvngqnJd8lSjRJAY3YTf6E8Np9eV13H+0a68e+J0Po+PQINGTfabTUWchbdEnXp+V4itAoLu5+vXhBUKFCKSFz+Cp8fSvtcTq3MSxl7fiRTt6O0b/M75BNyywbsafEZu9CIrHV+T+t+YQ6ucxVhelbeO6LWQzUco/FoW71Xhj9oTgeIpOHV2XcJxU3L4ZSB0zICRDlpb10vhsgnT+Egbc7Bh+zeM5N04+cKy5l/c8uI2BbRXR/bOF/KBTfz+7NrmpQ7Uv', 'base64');
+    VM.enableMemoryProtection('f4044d258a8e719479c02653c53e55b9');
+    VM.setBytecodeIntegrityKey('1b6c1f71c903492ba08f94c6ed88d2f0');
+    VM.enableAntiDebug('a969649337400943637d74b2f9292f29');
+    VM.enableSelfModifyingBytecode('76b6e35fbd7f5f483e90868875fd8e14');
+    VM.enableAntiDump('93374f6a33db47d3dec777d766526aa4');
+    VM.write(191, 795212067);
+    VM.loadFromString('JSCX1:2614dd33af3199bc:JSVK_c72bb9d05bfa:IJS:2668134dbdfad1c10b3c67efb9a70269:27dzzWVcdcZt323u0XjPKIuk2aJubo6+AhvnEylvrxgtgdPklo/GzyaxJHcB7nCoEFg5PhBjMhH7rMEdjyTbDVp0TP3JBZB74fcob/v5x8gwTN67Zg3F/vBKwtiG0Vccxu4aKWdbTcgkq/f4qJaLNQywcazs9w4oLHerxgynKuFQOdjdXV7ujjVl1fV4qzSx+ywaoV3P5a8WlcvFouyFUCDNk7moR8eHeHDrtEwmyUu6undDbbzQzSZAC6BaP87FK35zuDvVA0ppurNa2gk7oPsjx/N+jICpdcL0bzjD8+BQpH8fw5+pXkk4AxI4oPUM7lBtuk+af51/+tMMDnV1E4zZNMY2yXLyWZrYcVMPMmmKR/rNhYiELWmuBPKYGZl8LZQa69URKDF3lMUKQcmf6NX7Vz97Lo7ug/2A1JJBetkhLvIMntFoic22gqD1Jnp1xt3XEZONLQ+BYja22Wg7LiKBK/BBSp7+DG45JFU0kC+Fv0nR5kCiLaJDJxVRC5sfBNDqQ0LdKoGrSVzTDv3dy4VzgoGOAXeVGyWPshVUn5faOWUzlTggotXbqJRj1w3c7A8VLoGrTiL+f9ddvyPtvUGYpX06fNFW0z3rR7xy9iGMXEd1Xt0DSUPeuQm9+D7Zea2mTz1ZA1tkhVdXQv60mC5LvRoirK6EOOwKEMgM/LSrg9MAeGoGo3tUJMKZ9YIk63kOiuxuweZKpcgsjc9rEMYQ3ykIkki0AfTyPpN+qnSg33xGXx2KbmWtvvIiO9Tp2SvEqnc7PPKvlJT21ZoPyQG18ERaGR8ad6t83LhAzWiRaH0PG/OlsCpeyRrlBV07NGqTfzgLI7HAWXQyb7e0zOlEXW6ubV4RhHQMLbQPbNR/YpCP4H+Wu5EchStlWrG8NUoBuzMPeCn2aE+Xg4IlAd01KY9TTDkgymlc2D+Oh3PdSeHrdXicc2yOFVzIk79K5rb1SxtkZcayU8OD2pJRi9FCEL0e1MVFY/5oPLPcuBHlvOW5TaOfBErZp1wOgo3nkQNI313UcSJm7lk7035z5VH3BMMpJ3BI88dN8A==', 'base64');
     VM.loadDependencies({
-        106: console,
-        115: __jsv_arg_d009eab2,
-        166: __jsv_arg_93583c8b
+        54: __jsv_arg_84e9bcb6,
+        72: console,
+        111: __jsv_arg_412b5e02
     });
     VM.run();
-    return VM.read(163);
+    return VM.read(159);
 }
 function sub(a, b) {
-    const __jsv_arg_9e4e6911 = a;
-    const __jsv_arg_91969529 = b;
+    const __jsv_arg_5e0c343a = a;
+    const __jsv_arg_d1c72adf = b;
     const VM = new __JSV_RUNTIME({
-        'profileId': 'vm_0762ae25b3',
+        'profileId': 'vm_f8e548145d',
         'registerCount': 192,
-        'dispatcherVariant': 'striped',
+        'dispatcherVariant': 'clustered',
         'aliasBaseCount': 3,
         'aliasJitter': 2,
-        'decoyCount': 48,
-        'decoyStride': 2,
+        'decoyCount': 47,
+        'decoyStride': 1,
         'runtimeOpcodeDerivation': 'stateful',
-        'polyEndian': 'BE'
+        'polyEndian': 'LE'
     });
-    VM.enableMemoryProtection('cae2cd4b82680b005abc476b0f06fb92');
-    VM.setBytecodeIntegrityKey('27472f56ae5af91581a6d0f642df5a63');
-    VM.enableAntiDebug('1fe0f4b649596c4aa9e2b3f7d277ab9d');
-    VM.enableSelfModifyingBytecode('f6df8ced09ea67ee3a68b70ff0dc284f');
-    VM.enableAntiDump('68ab97c752bd979001ff702afa4801e3');
-    VM.write(191, 904671776);
-    VM.loadFromString('JSCX1:9e2e89668481f7eb:JSVK_610de3058196:IJS:200aab6663038346ba85e11ec9a343c5:/PePqYTBnFfIJBvGbyTUWiuD6uyc+IP7AOttsQIbMRH6o8jAUu9S4CGHkG13IQGJH0gMzqiQ/UDPXs6BpfKkREq7+ZeTJiHh0bngUknx9As3LKm6LxmrqlzD245/XeHAFS6f9tQRfcA8cvJ2kFocM3XZgDIDfpI7eZaSl4PoL9kVTAL8X8uSdkSa73tp3++yOcON4CSAbhVYbXbA9KWY3jz4LLv80vsyl4HUduifTo6PcxtX8ZjO0k6bFVjV4uFP8t6qPQsc+ZyrE0CwQndFh0nPJy7whMlLSrtJzAKOH0tMyU/253dDsd9Syr8MIydja1tiorxZNWRbjnE1VcR5tij1F4Xq5ROt0ViZvIy2DU8MwORuEUqz6OB+zxjLrhAaKyVyL5lhGMjCrwt5gRhDTY2cFJlkb0RKrTTqhiJOqoHK39cJqH8MtBk2JPMImnqaC6/5gOasWiJXylZqmWJWTo7JO4YGIO4pC7KUa+IGKm2UgOFihX0ZH2TpCO1u5ALnrDeoCMH6nD5abUtrvrpQEExeX9evzw1nqo1Kaz4Qa6GdhWAg8JcePnrw9xD70ZioqemluSOYNAwDNIXb9CUCBmT5eWs/qS87zHo1ixkS8VfmXizqu0m5Zd0WQP8j8l8/f5qEG+NLfKwixycBdP3CAYcfC1O5jy7oEn8uErdJx+l+S0mjRpaqcify/yOsmM4mWFfwR8wwTraooo7i6bSKBCysLUOASSpXv+bzKvJwX2rb//+EhkhI6Hf6roTX3cXY4cDH0y9+b9OUrx2TT/vVGCx9v6d5cJuLpxf29dWUMnDtdO9NEWRwfGhA+HnGqmLDs45oZNSSW/2ZUbt2q742qRJPUg3/m2+swNBbp+EiA/tBgkXHwITZA79kANTvC52WXxo7NXljBVGxRCEzmck5mDBxbz5GEXJDk8fL1kTGj+wmHHB7mSsYfzybBTHaeoLhkHET8qtCSzfOpBBUyDjKMCffzEBLMg2VCEFK1Yy5+RNOnUp766breYx9M5fCAehJa5eLMgLhlYJtfgk+Ht8BMkPtfad4RJgl++cUu26kfHEszoKNMoe8/XQ/h6chV+7y84BgeaFBmDLXjLik4ekAnJGKZ/mAGkyYWlfBP5DU3cAdZ9E2gGKrmVWrqij3itsPlEqGnX20LrkzWUJRP2ekPGRAuhO2NVygRtR4OXw8DTho/KHwEp0Cal4/EC7uldhn6zbPeUitOWp1CyaVy9FYGx+6lxbWFhF+2CnPe+j5d+Y/dh8d', 'base64');
+    VM.enableMemoryProtection('2e5aab73ec3b44d239fbb5dacf580d19');
+    VM.setBytecodeIntegrityKey('1b6c1f71c903492ba08f94c6ed88d2f0');
+    VM.enableAntiDebug('d0d1975f53eaaa37cb412c5b890f696f');
+    VM.enableSelfModifyingBytecode('8b2f76f6ae4aa701c70a17e279bc3e56');
+    VM.enableAntiDump('1d6cd4d1a11212b00421750dc0248080');
+    VM.write(191, 462622216);
+    VM.loadFromString('JSCX1:65b61ac339799daf:JSVK_3e146c38d127:IJS:6f0825ed20ae2145e455a59edd11be7e:1pzlEvdeexLoaaO1NWXJJQVFvOoJFFqN9L9MDtqjbQZyqZmVuXqeG/g+YI9w2qbydDykHYJQ+Zu43XmXL0jTFyTk0T6cHMyswL0hzI1LmlXdB21TFPfYcY39Ai1fKrHHLuwGsTpckjccMOWN75N7vnVjPP5oigrnmYpxGNxGDZ6QbCIlrcET/Bb++K0GxCPezsGTHQOqjUNA6aP3TkOAUJw8zyx2BWGEDAaxAGTX72Ecbs5yKAqmbK5ob8ZhhIYKiLkGQz7el8G6Hsp9Qv/KoT0AZrZjTDuR2YgSTXfzn8fY4lriLT/VHPFKhMCDDjOQWhj9tq7NRwAru4IhZ4YJb6Q/+hfxbWN6EBXd+X1AVMUwhFlbs3SK21tEHzXSAalcrWJ0NfEY76Id1+RrTH0Wzh6Xc31MAB8E7c/4NQMsr5QT+Fp4KxxGVByrIxS6CCJudM3E8S7+hkPm7XOBRvN9NFD5fAXNBIjbzYTUvbO6IvIKg6ngf6wsmWWyTP594oVQq+mjxDsvn71J1kIIOlJbNn3z2BHhMvGhapnrZEpqzjVPDHTGj7nJZC2njuv4WsRah8BrPNFwcqw3EeIeeRFCrOecJ8qPxzAPsdaAt9832wNQKXe0rriY+IrjrcnA/iGqtRaWGhDr517kqIhwgnVv33EwKNmsOFcqfnvGliCLiSRZ9rfXUTpnIFYVRbKb4AeuD70FbntkuzcMNNjkM2NyOhzl12JneqtL7W7QmwnsKz/29pArAdY8ou4nxIlDoYqxRxRNFoRBGrb0VUsklj4K7p01LkPJHoBsudm8ofUavZgyUSL8yN0LJn82AmlbQOolFC94DbzlWFVNiyaCw0oVD7T3itDYT6N4kxKZaslw6gsNL7wIUjah7TStN8y9fAw01jN/2UH1/07mLOns19PomShBuQHOiMc1hbplMv2MlrotaBYkdWnDv7P+QWE3nQR0g9x3NElazqd0R3ZxFqPiR9Q0dikf9+wCFGNalBDWkeVulsIZN+wMd2tu+fumT/4a8KSdcd8ZuwMvK6kZEZM3cFSU8UhElqgGxNXKjA==', 'base64');
     VM.loadDependencies({
-        32: __jsv_arg_9e4e6911,
-        60: console,
-        82: __jsv_arg_91969529
+        104: __jsv_arg_5e0c343a,
+        152: console,
+        153: __jsv_arg_d1c72adf
     });
     VM.run();
-    return VM.read(149);
+    return VM.read(25);
 }
 const r1 = add(20, 10);
 const r2 = sub(20, 10);

@@ -1734,5 +1734,5 @@ if (typeof module !== 'undefined' && module.exports) {
 } else if (typeof globalThis !== 'undefined') {
     globalThis.JSVM = JSVM;
 }
-JSVM.registerBytecodeKey('JSVK_c72bb9d05bfa', '/fV2RxfdviYh3LeqfzlnBRjUu21dwkGC');
-JSVM.registerBytecodeKey('JSVK_3e146c38d127', 'rNyhgqU+i8i2FKT5Q5DeApoyMv2+i09F');
+JSVM.registerBytecodeKey('JSVK_8d412747a01a', 'noLyyyZbO3byUEyrtIHKm8Mjzb4WTe49');
+JSVM.registerBytecodeKey('JSVK_31c2700a27b8', 'b1lDdrNPQbixuLMei/ZBubuM/CyU4+Yn');
