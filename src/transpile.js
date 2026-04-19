@@ -1232,6 +1232,13 @@ async function transpile(code, options) {
                 });
             }
 
+            // Obfuscate opcodes on merged chunk (remap opcode numbers + VM table)
+            // Must run BEFORE encoding so that opcode bytes are correct when stateful encoding is applied
+            if (options.passes.has("RemoveUnused")) {
+                obfuscateOpcodes([mergedChunk], vmAST);
+                rewriteQueue._ilvObfuscated = true;
+            }
+
             // Encode merged chunk
             console.log("Encoding merged chunk...");
             const opcodeSeed = JSVM.deriveOpcodeStateSeed(sharedConfig.integrityKey);
@@ -1333,7 +1340,7 @@ async function transpile(code, options) {
         }
     }
 
-    if (options.passes.has("RemoveUnused")) {
+    if (options.passes.has("RemoveUnused") && !rewriteQueue._ilvObfuscated) {
         obfuscateOpcodes(chunks, vmAST)
     }
 

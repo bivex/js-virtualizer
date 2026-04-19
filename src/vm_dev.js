@@ -243,6 +243,7 @@ class JSVM {
         this.antiDump = false
         this.antiDumpSeed = 0
         this.antiDumpHighWaterMark = 0
+        this.antiDumpBackup = null
         this.registers[registers.INSTRUCTION_POINTER] = 0
         this.registers[registers.UNDEFINED] = undefined
         this.registers[registers.VOID] = 0
