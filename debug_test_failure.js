@@ -36,7 +36,7 @@ async function run() {
         vmOutputPath: vmPath,
         transpiledOutputPath: transPath,
         writeOutput: true,
-        controlFlowFlattening: false,
+        controlFlowFlattening: true,
         polymorphic: false,
         obfuscateVM: false,
         obfuscateTranspiled: false,

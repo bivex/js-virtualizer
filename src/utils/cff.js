@@ -231,11 +231,11 @@ function applyControlFlowFlattening(chunk, cffStateReg, options = {}) {
             const targets = getJumpTargetBlock(lastOpcode, block.endOpcodeIndex - 1);
             newOpcodes.pop();
             if (targets.length > 0) {
-                newOpcodes.push(new Opcode("SET", cffStateReg, targets[0].stateId));
+                newOpcodes.push(new Opcode("LOAD_DWORD", cffStateReg, encodeDWORD(targets[0].stateId, polyEndian)));
             } else {
                 const nextBlockIdx = block.index + 1;
                 if (nextBlockIdx < blocks.length) {
-                    newOpcodes.push(new Opcode("SET", cffStateReg, stateIds.get(nextBlockIdx)));
+                    newOpcodes.push(new Opcode("LOAD_DWORD", cffStateReg, encodeDWORD(stateIds.get(nextBlockIdx), polyEndian)));
                 } else {
                     newOpcodes.push(lastOpcode);
                     rewrittenBlocks.push({ ...block, opcodes: newOpcodes, stateId: stateIds.get(block.index) });
@@ -257,13 +257,13 @@ function applyControlFlowFlattening(chunk, cffStateReg, options = {}) {
             newOpcodes.pop();
 
             const takenStub = [
-                new Opcode("SET", cffStateReg, takenState),
+                new Opcode("LOAD_DWORD", cffStateReg, encodeDWORD(takenState, polyEndian)),
                 new Opcode("JUMP_UNCONDITIONAL", encodeDWORD(0, polyEndian)),
             ];
             const takenStubBytes = takenStub.reduce((s, op) => s + op.toBytes().length, 0);
 
             const notTakenStub = [
-                new Opcode("SET", cffStateReg, notTakenState),
+                new Opcode("LOAD_DWORD", cffStateReg, encodeDWORD(notTakenState, polyEndian)),
                 new Opcode("JUMP_UNCONDITIONAL", encodeDWORD(0, polyEndian)),
             ];
 
@@ -291,13 +291,13 @@ function applyControlFlowFlattening(chunk, cffStateReg, options = {}) {
             newOpcodes.pop();
 
             const notTakenStub = [
-                new Opcode("SET", cffStateReg, notTakenState),
+                new Opcode("LOAD_DWORD", cffStateReg, encodeDWORD(notTakenState, polyEndian)),
                 new Opcode("JUMP_UNCONDITIONAL", encodeDWORD(0, polyEndian)),
             ];
             const notTakenStubBytes = notTakenStub.reduce((s, op) => s + op.toBytes().length, 0);
 
             const takenStub = [
-                new Opcode("SET", cffStateReg, takenState),
+                new Opcode("LOAD_DWORD", cffStateReg, encodeDWORD(takenState, polyEndian)),
                 new Opcode("JUMP_UNCONDITIONAL", encodeDWORD(0, polyEndian)),
             ];
 
@@ -504,11 +504,11 @@ function applyMultiChunkControlFlowFlattening(chunks, cffStateReg, options = {})
 
                 newOpcodes.pop();
                 const notTakenStub = notTakenState ? [
-                    new Opcode("SET", cffStateReg, notTakenState),
+                    new Opcode("LOAD_DWORD", cffStateReg, encodeDWORD(notTakenState, polyEndian)),
                     new Opcode("JUMP_UNCONDITIONAL", encodeDWORD(0, polyEndian)),
                 ] : [new Opcode("END")];
                 const takenStub = takenState ? [
-                    new Opcode("SET", cffStateReg, takenState),
+                    new Opcode("LOAD_DWORD", cffStateReg, encodeDWORD(takenState, polyEndian)),
                     new Opcode("JUMP_UNCONDITIONAL", encodeDWORD(0, polyEndian)),
                 ] : [new Opcode("END")];
 
@@ -522,7 +522,7 @@ function applyMultiChunkControlFlowFlattening(chunks, cffStateReg, options = {})
             } else {
                 const nextBlock = validBlocks[validBlocks.indexOf(block) + 1];
                 if (nextBlock) {
-                    newOpcodes.push(new Opcode("SET", cffStateReg, stateIds.get(nextBlock.index)));
+                    newOpcodes.push(new Opcode("LOAD_DWORD", cffStateReg, encodeDWORD(stateIds.get(nextBlock.index), polyEndian)));
                     newOpcodes.push(new Opcode("JUMP_UNCONDITIONAL", encodeDWORD(0, polyEndian)));
                     needsDispatchJump = true;
                 } else {
@@ -582,8 +582,11 @@ function applyMultiChunkControlFlowFlattening(chunks, cffStateReg, options = {})
     for (const idx of blockIndices) {
         const block = allRewrittenBlocks[idx];
         for (const op of block.opcodes) {
-            if (op.name === "JUMP_UNCONDITIONAL" && op.data.length === 4 && op.data.readInt32BE(0) === 0) {
-                op.modifyArgs(encodeDWORD(realDispatchByteOffset - rebuildPos, polyEndian));
+            if (op.name === "JUMP_UNCONDITIONAL" && op.data.length === 4) {
+                const offset = polyEndian === "LE" ? op.data.readInt32LE(0) : op.data.readInt32BE(0);
+                if (offset === 0) {
+                    op.modifyArgs(encodeDWORD(realDispatchByteOffset - rebuildPos, polyEndian));
+                }
             }
             resultOpcodes.push(op);
             rebuildPos += op.toBytes().length;

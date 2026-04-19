@@ -641,7 +641,11 @@ const implOpcode = {
     }, FUNC_ARRAY_CALL: function () {
         const fn = this.readByte(), dst = this.readByte(), funcThis = this.readByte(), argsReg = this.readByte();
         const args = this.read(argsReg);
-        const res = this.read(fn).apply(this.read(funcThis), args);
+        const fnVal = this.read(fn);
+        if (fnVal === null || fnVal === undefined) {
+            console.log(`ERROR: FUNC_ARRAY_CALL: Function at register ${fn} is ${fnVal}! Register ${funcThis} (this) is ${this.read(funcThis)}`);
+        }
+        const res = fnVal.apply(this.read(funcThis), args);
         this.write(dst, res);
     }, FUNC_ARRAY_CALL_AWAIT: async function () {
         const fn = this.readByte(), dst = this.readByte(), funcThis = this.readByte(), argsReg = this.readByte();
@@ -890,7 +894,9 @@ const implOpcode = {
         this.write(dest, src);
     }, SET_REF: function () {
         const dest = this.readByte(), src = this.readByte();
-        this.write(dest, this.read(src));
+        const val = this.read(src);
+        console.log(`SET_REF: Writing ${val} from register ${src} to register ${dest}`);
+        this.write(dest, val);
     }, WRITE_EXT: function () {
         const dest = this.readByte(), src = this.readByte();
         const ref = this.read(dest);
@@ -909,8 +915,12 @@ const implOpcode = {
         obj[this.read(prop)] = this.read(src);
     }, GET_PROP: function () {
         const dest = this.readByte(), object = this.readByte(), prop = this.readByte();
-
-        this.write(dest, this.read(object)[this.read(prop)]);
+        const obj = this.read(object);
+        const p = this.read(prop);
+        if (obj === null || obj === undefined) {
+            console.log(`ERROR: GET_PROP: Object at register ${object} is ${obj}! Property: ${p}, Dest: ${dest}`);
+        }
+        this.write(dest, obj[p]);
     }, SET_INDEX: function () {
         const array = this.readByte(), index = this.readByte(), src = this.readByte();
         this.read(array)[this.read(index)] = this.read(src);

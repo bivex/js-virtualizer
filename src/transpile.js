@@ -1025,6 +1025,7 @@ async function transpile(code, options) {
             const bytecodeKeyId = `JSVK_${crypto.randomBytes(6).toString("hex")}`;
             const bytecodeEncryptionKey = crypto.randomBytes(24).toString("base64");
 
+            console.log(`DEBUG: Wrapper for ${node.id.name}: initialStateId=${initialStateId}, outputRegister=${generator.outputRegister}`);
             const virtualizedFunction = functionWrapperTemplate
                 .replace("%FN_PREFIX%", node.async ? "async " : "")
                 .replace("%FUNCTION_NAME%", node.id.name)
