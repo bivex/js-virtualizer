@@ -770,7 +770,7 @@ async function transpile(code, options) {
     options.polymorphic = options.polymorphic ?? true;
     options.antiDump = options.antiDump ?? true;
     options.nestedVM = options.nestedVM ?? false;
-    options.timeLock = options.timeLock ?? false;
+    options.timeLock = options.timeLock ?? true;
     options.dispatchObfuscation = options.dispatchObfuscation ?? true;
     options.environmentLock = options.environmentLock ?? null;
     options.vmObfuscationTarget = options.vmObfuscationTarget ?? "node";
