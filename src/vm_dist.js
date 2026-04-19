@@ -36,6 +36,7 @@ const zlib = (() => {
 const BYTECODE_INTEGRITY_PREFIX = "JSCI1";
 const BYTECODE_ENCRYPTED_PREFIX = "JSCX1";
 const bytecodeKeyRegistry = new Map();
+const whiteboxTableRegistry = new Map();
 
 function rotateLeft(value, shift) {
     return ((value << shift) | (value >>> (32 - shift))) >>> 0;
@@ -156,6 +157,18 @@ function createBytecodeCipherBytes(input, key, salt) {
     }
 
     return output;
+}
+
+// White-box cipher (browser-compatible, Uint8Array)
+function whiteboxDecryptBytes(data, inverseTable, key) {
+    const out = new Uint8Array(data.length);
+    const keyCode = String(key ?? "");
+    for (let i = 0; i < data.length; i++) {
+        const kc = keyCode.charCodeAt(i % keyCode.length);
+        const mask = ((Math.imul(kc ^ i, 0x45d9f3b) >>> 0) ^ (i * 17)) & 0xFF;
+        out[i] = inverseTable[data[i] ^ mask];
+    }
+    return out;
 }
 
 function deriveOpcodeStateSeed(key) {
@@ -398,7 +411,14 @@ function unpackBytecodeEnvelope(code, format, key) {
         }
 
         const decryptionKey = resolveRegisteredBytecodeKey(keyId);
-        const decryptedPayload = decodeUtf8(createBytecodeCipherBytes(decodeBase64ToBytes(payload), decryptionKey, salt));
+        let decryptedData = createBytecodeCipherBytes(decodeBase64ToBytes(payload), decryptionKey, salt);
+        if (flags.includes("W")) {
+            const tables = whiteboxTableRegistry.get(keyId);
+            if (tables) {
+                decryptedData = whiteboxDecryptBytes(decryptedData, tables.inverse, decryptionKey);
+            }
+        }
+        const decryptedPayload = decodeUtf8(decryptedData);
 
         if (format === "base64" && !isBase64Like(decryptedPayload)) {
             throw new Error("VM bytecode decryption failed");
@@ -1204,6 +1224,11 @@ class JSVM {
 
     static registerBytecodeKey(keyId, key) {
         bytecodeKeyRegistry.set(String(keyId ?? ""), String(key ?? ""));
+        return this
+    }
+
+    static setWhiteboxTables(keyId, tables) {
+        whiteboxTableRegistry.set(String(keyId ?? ""), tables);
         return this
     }
 

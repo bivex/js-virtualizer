@@ -245,4 +245,152 @@ console.log(compute(5));
         const virt = runNode(trOut);
         expect(virt).toBe(src);
     }, 30000);
+
+    test("all features including junkInStream + whitebox", async () => {
+        const code = `
+// @virtualize
+function fib(n) {
+    if (n <= 1) return n;
+    return fib(n - 1) + fib(n - 2);
+}
+console.log(fib(10));
+`;
+        const slug = `int-all-${Date.now()}`;
+        const srcPath = path.join(outputDir, `${slug}.src.js`);
+        fs.writeFileSync(srcPath, code);
+
+        const vmOut = path.join(outputDir, `${slug}.vm.js`);
+        const trOut = path.join(outputDir, `${slug}.virtualized.js`);
+
+        await transpile(code, {
+            fileName: `${slug}.js`,
+            vmOutputPath: vmOut,
+            transpiledOutputPath: trOut,
+            passes: ["RemoveUnused"],
+            junkInStream: true,
+            whiteboxEncryption: true,
+            dispatchObfuscation: true,
+            timeLock: true
+        });
+
+        const src = runNode(srcPath);
+        const virt = runNode(trOut);
+        expect(virt).toBe(src);
+    }, 30000);
+});
+
+// ---------------------------------------------------------------------------
+// Junk In-Stream unit tests
+// ---------------------------------------------------------------------------
+describe("Junk In-Stream", () => {
+    const {insertJunkInStream} = require("../src/utils/junkInStream");
+
+    test("inserts junk instructions into bytecode", () => {
+        const {VMChunk, Opcode} = require("../src/utils/assembler");
+        const chunk = new VMChunk();
+        for (let i = 0; i < 20; i++) {
+            chunk.append(new Opcode("LOAD_DWORD", 10 + i, encodeDWORD(i)));
+        }
+        chunk.append(new Opcode("END"));
+        const originalLength = chunk.code.length;
+
+        insertJunkInStream(chunk, 256, {polyEndian: "BE"});
+        expect(chunk.code.length).toBeGreaterThan(originalLength);
+    });
+
+    test("does not change execution result", () => {
+        const VM = new JSVM();
+        const chunk = new VMChunk();
+        chunk.append(new Opcode("LOAD_DWORD", 3, encodeDWORD(42)));
+        chunk.append(new Opcode("LOAD_DWORD", 4, encodeDWORD(8)));
+        chunk.append(new Opcode("ADD", 5, 3, 4));
+        for (let i = 0; i < 15; i++) {
+            chunk.append(new Opcode("LOAD_DWORD", 10 + i, encodeDWORD(i)));
+        }
+        chunk.append(new Opcode("END"));
+
+        insertJunkInStream(chunk, 256, {polyEndian: "BE"});
+        const bytecode = chunk.toBytes().toString("base64");
+        VM.loadFromString(bytecode, "base64");
+        VM.run();
+        expect(VM.read(5)).toBe(50);
+    });
+
+    test("respects disabled option in transpile", async () => {
+        const code = `
+// @virtualize
+function add(a, b) { return a + b; }
+console.log(add(1, 2));
+`;
+        const slug = `junk-disabled-${Date.now()}`;
+        const srcPath = path.join(outputDir, `${slug}.src.js`);
+        fs.writeFileSync(srcPath, code);
+        const vmOut = path.join(outputDir, `${slug}.vm.js`);
+        const trOut = path.join(outputDir, `${slug}.virtualized.js`);
+
+        await transpile(code, {
+            fileName: `${slug}.js`, vmOutputPath: vmOut, transpiledOutputPath: trOut,
+            passes: ["RemoveUnused"], junkInStream: false, whiteboxEncryption: false
+        });
+        expect(runNode(trOut)).toBe(runNode(srcPath));
+    }, 15000);
+});
+
+// ---------------------------------------------------------------------------
+// White-Box Cipher unit tests
+// ---------------------------------------------------------------------------
+describe("White-Box Cipher", () => {
+    const {generateTTables, whiteboxEncrypt, whiteboxDecrypt} = require("../src/utils/whiteboxCipher");
+
+    test("T-table is a bijection (all 256 values present)", () => {
+        const {forward, inverse} = generateTTables("test-key");
+        const seen = new Set(forward);
+        expect(seen.size).toBe(256);
+        for (let i = 0; i < 256; i++) {
+            expect(inverse[forward[i]]).toBe(i);
+        }
+    });
+
+    test("encrypt/decrypt roundtrip", () => {
+        const key = "roundtrip-test-key";
+        const {forward, inverse} = generateTTables(key);
+        const data = Buffer.from("Hello, whitebox world! 0x42");
+        const encrypted = whiteboxEncrypt(data, forward, key);
+        const decrypted = whiteboxDecrypt(encrypted, inverse, key);
+        expect(decrypted.toString()).toBe(data.toString());
+    });
+
+    test("different keys produce different T-tables", () => {
+        const a = generateTTables("key-a");
+        const b = generateTTables("key-b");
+        expect(a.forward).not.toEqual(b.forward);
+    });
+
+    test("encrypted data differs from original", () => {
+        const key = "diff-test";
+        const {forward} = generateTTables(key);
+        const data = Buffer.from("AAAA");
+        const encrypted = whiteboxEncrypt(data, forward, key);
+        expect(encrypted.toString("hex")).not.toBe(data.toString("hex"));
+    });
+
+    test("transpile with whiteboxEncryption produces matching output", async () => {
+        const code = `
+// @virtualize
+function mul(a, b) { return a * b; }
+console.log(mul(7, 8));
+`;
+        const slug = `wb-${Date.now()}`;
+        const srcPath = path.join(outputDir, `${slug}.src.js`);
+        fs.writeFileSync(srcPath, code);
+        const vmOut = path.join(outputDir, `${slug}.vm.js`);
+        const trOut = path.join(outputDir, `${slug}.virtualized.js`);
+
+        await transpile(code, {
+            fileName: `${slug}.js`, vmOutputPath: vmOut, transpiledOutputPath: trOut,
+            passes: ["RemoveUnused"], whiteboxEncryption: true,
+            junkInStream: false, dispatchObfuscation: false, timeLock: false
+        });
+        expect(runNode(trOut)).toBe(runNode(srcPath));
+    }, 15000);
 });

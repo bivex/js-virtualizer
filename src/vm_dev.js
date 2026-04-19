@@ -66,6 +66,9 @@ const {
 } = vmCommon;
 
 const { createTimeLockState, solveTimeLock, verifyTimeLock } = require("./utils/timeLock");
+const { whiteboxDecrypt, whiteboxEncrypt } = require("./utils/whiteboxCipher");
+
+const whiteboxTableRegistry = new Map();
 
 const {log, LogData} = require("./utils/log");
 const zlib = require("node:zlib");
@@ -150,7 +153,14 @@ function unpackBytecodeEnvelope(code, format, key) {
         }
 
         const decryptionKey = resolveRegisteredBytecodeKey(keyId);
-        const decryptedPayload = createBytecodeCipherBuffer(Buffer.from(payload, "base64"), decryptionKey, salt).toString("utf8");
+        let decryptedData = createBytecodeCipherBuffer(Buffer.from(payload, "base64"), decryptionKey, salt);
+        if (flags.includes("W")) {
+            const tables = whiteboxTableRegistry.get(keyId);
+            if (tables) {
+                decryptedData = whiteboxDecrypt(decryptedData, tables.inverse, decryptionKey);
+            }
+        }
+        const decryptedPayload = decryptedData.toString("utf8");
 
         if (format === "base64" && !isBase64Like(decryptedPayload)) {
             throw new Error("VM bytecode decryption failed");
@@ -270,17 +280,26 @@ class JSVM {
         return `${BYTECODE_INTEGRITY_PREFIX}:${normalizedSalt}:${digest}:${code}`;
     }
 
-    static createEncryptedBytecodeEnvelope(code, format, integrityKey, keyId, bytecodeKey, salt, flags = "S") {
+    static createEncryptedBytecodeEnvelope(code, format, integrityKey, keyId, bytecodeKey, salt, flags = "S", whiteboxTables = null) {
         const normalizedSalt = String(salt ?? "");
         const normalizedKeyId = String(keyId ?? "");
         const normalizedFlags = normalizeEnvelopeFlags(flags);
-        const encryptedPayload = createBytecodeCipherBuffer(Buffer.from(String(code ?? ""), "utf8"), bytecodeKey, normalizedSalt).toString("base64");
+        let rawData = Buffer.from(String(code ?? ""), "utf8");
+        if (whiteboxTables) {
+            rawData = whiteboxEncrypt(rawData, whiteboxTables.forward, bytecodeKey);
+        }
+        const encryptedPayload = createBytecodeCipherBuffer(rawData, bytecodeKey, normalizedSalt).toString("base64");
         const digest = createBytecodeIntegrityDigest(`${normalizedKeyId}:${normalizedFlags}:${encryptedPayload}`, normalizedSalt, integrityKey, format);
         return `${BYTECODE_ENCRYPTED_PREFIX}:${normalizedSalt}:${normalizedKeyId}:${normalizedFlags}:${digest}:${encryptedPayload}`;
     }
 
     static registerBytecodeKey(keyId, key) {
         bytecodeKeyRegistry.set(String(keyId ?? ""), String(key ?? ""));
+        return this
+    }
+
+    static setWhiteboxTables(keyId, tables) {
+        whiteboxTableRegistry.set(String(keyId ?? ""), tables);
         return this
     }
 

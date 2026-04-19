@@ -37,6 +37,8 @@ const {desugarStatementList} = require("./utils/desugar");
 const {shuffle} = require("./utils/random");
 const {insertOpaquePredicates} = require("./utils/opaquePredicates");
 const {applyControlFlowFlattening} = require("./utils/cff");
+const {insertJunkInStream} = require("./utils/junkInStream");
+const {generateTTables, whiteboxEncrypt} = require("./utils/whiteboxCipher");
 const {deriveNestedKey, deriveInnerShuffleSeed} = require("./utils/vmCommon");
 const {innerOpNames: _innerOpNames} = require("./utils/innerOpcodes");
 const {generateInnerVMSource} = require("./utils/innerVmCodegen");
@@ -772,6 +774,8 @@ async function transpile(code, options) {
     options.nestedVM = options.nestedVM ?? false;
     options.timeLock = options.timeLock ?? true;
     options.dispatchObfuscation = options.dispatchObfuscation ?? true;
+    options.junkInStream = options.junkInStream ?? true;
+    options.whiteboxEncryption = options.whiteboxEncryption ?? true;
     options.environmentLock = options.environmentLock ?? null;
     options.vmObfuscationTarget = options.vmObfuscationTarget ?? "node";
     options.transpiledObfuscationTarget = options.transpiledObfuscationTarget ?? "node";
@@ -999,6 +1003,13 @@ async function transpile(code, options) {
                 if (options.deadCodeInjection) {
                     injectDeadCode(generator.chunk, polyEndian);
                 }
+                if (options.junkInStream) {
+                    insertJunkInStream(generator.chunk, vmProfile.registerCount, {
+                        polyEndian,
+                        cffStateRegister: options.controlFlowFlattening !== false ? vmProfile.registerCount - 1 : undefined,
+                        opaqueScratch: generator.opaqueScratch
+                    });
+                }
                 let cffInitialStateId = 0;
                 if (options.controlFlowFlattening !== false) {
                     const jumpTargetSeed = JSVM.deriveJumpTargetSeed(integrityKey);
@@ -1110,7 +1121,8 @@ async function transpile(code, options) {
             integrityKey,
             bytecodeKeyId,
             bytecodeEncryptionKey,
-            vmProfile
+            vmProfile,
+            whiteboxTables: options.whiteboxEncryption ? generateTTables(bytecodeEncryptionKey) : null
         })
         } finally {
         }
@@ -1319,7 +1331,7 @@ async function transpile(code, options) {
         }
     }
 
-    rewriteQueue.forEach(({result, node, chunk, integrityKey, bytecodeKeyId, bytecodeEncryptionKey, vmProfile}) => {
+    rewriteQueue.forEach(({result, node, chunk, integrityKey, bytecodeKeyId, bytecodeEncryptionKey, vmProfile, whiteboxTables}) => {
         const opcodeSeed = JSVM.deriveOpcodeStateSeed(integrityKey);
         const jumpSeed = JSVM.deriveJumpTargetSeed(integrityKey);
         const instructionSeed = JSVM.deriveInstructionByteSeed(integrityKey);
@@ -1328,7 +1340,8 @@ async function transpile(code, options) {
         applyPerInstructionEncoding(chunk, instructionSeed);
         const bytecode = zlib.deflateSync(Buffer.from(chunk.toBytes())).toString(encoding);
         const integritySalt = crypto.randomBytes(8).toString("hex");
-        const protectedBytecode = JSVM.createEncryptedBytecodeEnvelope(bytecode, encoding, integrityKey, bytecodeKeyId, bytecodeEncryptionKey, integritySalt, "IJS");
+        const flags = whiteboxTables ? "IJSW" : "IJS";
+        const protectedBytecode = JSVM.createEncryptedBytecodeEnvelope(bytecode, encoding, integrityKey, bytecodeKeyId, bytecodeEncryptionKey, integritySalt, flags, whiteboxTables);
         result = result.replace("%BYTECODE%", protectedBytecode);
         node.body.body = acorn.parse(result, {ecmaVersion: "latest", sourceType: "module"}).body[0].body.body
     })
@@ -1337,8 +1350,15 @@ async function transpile(code, options) {
     const bytecodeKeyRegistrations = rewriteQueue
         .map(({bytecodeKeyId, bytecodeEncryptionKey}) => `JSVM.registerBytecodeKey('${bytecodeKeyId}', '${bytecodeEncryptionKey}');`)
         .join("\n");
+    const whiteboxTableRegistrations = rewriteQueue
+        .filter(({whiteboxTables}) => whiteboxTables !== null)
+        .map(({bytecodeKeyId, whiteboxTables}) => `JSVM.setWhiteboxTables('${bytecodeKeyId}', ${JSON.stringify(whiteboxTables)});`)
+        .join("\n");
     if (bytecodeKeyRegistrations.length > 0) {
         accompanyingVM = `${accompanyingVM}\n${bytecodeKeyRegistrations}\n`;
+    }
+    if (whiteboxTableRegistrations.length > 0) {
+        accompanyingVM = `${accompanyingVM}\n${whiteboxTableRegistrations}\n`;
     }
 
     let transpiledResult = escodegen.generate(ast);

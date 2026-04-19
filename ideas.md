@@ -95,11 +95,25 @@ Merge bytecode from multiple virtualized functions into a single dispatch loop w
 
 ## Experimental
 
-### 9. Junk Instructions In-Stream
-Not just dead code tails — interleave junk instructions between real ones that don't affect results but complicate tracing.
+### 9. Junk Instructions In-Stream ✅
+Interleaves dead instructions (LOAD_DWORD, LOAD_STRING, NOP, TEST, ADD) between real bytecode instructions. Uses high dead registers (registerCount-20 to registerCount-5) to avoid clobbering live values. No conditional jumps needed — junk executes harmlessly. Density: 6-10 instructions between insertions. Implemented in `src/utils/junkInStream.js`, integrated in `src/transpile.js`.
 
-### 10. White-Box Key Encryption
-Replace the current XOR cipher with a white-box AES/construction where the key is inseparable from the decryption code.
+**Option API:**
+```js
+await transpile(source, {
+    junkInStream: true,  // default: true
+});
+```
+
+### 10. White-Box Key Encryption ✅
+Replaces the simple XOR stream cipher with a T-table based construction. A 256-entry bijection lookup table (seeded from the encryption key) is generated per build. The T-table IS the key — extracting the original key from the table requires solving an underdetermined system. Decryption applies inverse T-table substitution + position-dependent XOR mask. T-tables are emitted as JS arrays in the VM source, making the key inseparable from the code. Implemented in `src/utils/whiteboxCipher.js`, `src/vm_dev.js` + `src/vm_dist.js` (whitebox decrypt in envelope unpacking).
+
+**Option API:**
+```js
+await transpile(source, {
+    whiteboxEncryption: true,  // default: true
+});
+```
 
 ### 11. Time-Lock / Proof-of-Work ✅
 Before the dispatch loop starts, solve a hash-chain PoW challenge. The solution is mixed into `runtimeOpcodeState`, so skipping silently corrupts dispatch. Fixed ~12-bit difficulty (~50-200ms delay per invocation). Implemented in `src/utils/timeLock.js`, `src/vm_dev.js` + `src/vm_dist.js` (`enableTimeLock`, `solveTimeLockChallenge`).
