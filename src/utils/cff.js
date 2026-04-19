@@ -315,7 +315,7 @@ function applyControlFlowFlattening(chunk, cffStateReg, options = {}) {
 
         const nextBlockIdx = block.index + 1;
         if (nextBlockIdx < blocks.length) {
-            newOpcodes.push(new Opcode("SET", cffStateReg, stateIds.get(nextBlockIdx)));
+            newOpcodes.push(new Opcode("LOAD_DWORD", cffStateReg, encodeDWORD(stateIds.get(nextBlockIdx), polyEndian)));
             newOpcodes.push(new Opcode("JUMP_UNCONDITIONAL", encodeDWORD(0, polyEndian)));
             rewrittenBlocks.push({ ...block, opcodes: newOpcodes, stateId: stateIds.get(block.index), needsDispatchJump: true });
         } else {
@@ -467,7 +467,7 @@ function applyMultiChunkControlFlowFlattening(chunks, cffStateReg, options = {})
                 newOpcodes.pop();
                 const targetState = targets.length > 0 ? targets[0].stateId : null;
                 if (targetState) {
-                    newOpcodes.push(new Opcode("SET", cffStateReg, targetState));
+                    newOpcodes.push(new Opcode("LOAD_DWORD", cffStateReg, encodeDWORD(targetState, polyEndian)));
                     newOpcodes.push(new Opcode("JUMP_UNCONDITIONAL", encodeDWORD(0, polyEndian)));
                     needsDispatchJump = true;
                 } else {
@@ -482,11 +482,11 @@ function applyMultiChunkControlFlowFlattening(chunks, cffStateReg, options = {})
 
                 newOpcodes.pop();
                 const takenStub = takenState ? [
-                    new Opcode("SET", cffStateReg, takenState),
+                    new Opcode("LOAD_DWORD", cffStateReg, encodeDWORD(takenState, polyEndian)),
                     new Opcode("JUMP_UNCONDITIONAL", encodeDWORD(0, polyEndian)),
                 ] : [new Opcode("END")];
                 const notTakenStub = notTakenState ? [
-                    new Opcode("SET", cffStateReg, notTakenState),
+                    new Opcode("LOAD_DWORD", cffStateReg, encodeDWORD(notTakenState, polyEndian)),
                     new Opcode("JUMP_UNCONDITIONAL", encodeDWORD(0, polyEndian)),
                 ] : [new Opcode("END")];
                 

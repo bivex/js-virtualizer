@@ -55,8 +55,8 @@ const {
 const functionWrapperTemplate = fs.readFileSync(path.join(__dirname, "./templates/functionWrapper.template"), "utf-8");
 const requireTemplate = fs.readFileSync(path.join(__dirname, "./templates/requireTemplate.template"), "utf-8");
 
-const vmDist = fs.readFileSync(path.join(__dirname, './vm_dist.js'), 'utf-8');
-const encodings = ['base64']
+const vmDist = fs.readFileSync(path.join(__dirname, "vm_dist.js"), "utf8");
+const encodings = ['base64'];
 const VM_PROFILE_REGISTER_BUCKETS = [96, 112, 128, 144, 160, 176, 192, 208, 224, 240, DEFAULT_REGISTER_COUNT];
 const DISPATCHER_VARIANTS = ["permuted", "clustered", "striped"];
 const OPCODE_DERIVATION_MODES = ["hybrid", "stateful", "position"];
@@ -1025,7 +1025,6 @@ async function transpile(code, options) {
             const bytecodeKeyId = `JSVK_${crypto.randomBytes(6).toString("hex")}`;
             const bytecodeEncryptionKey = crypto.randomBytes(24).toString("base64");
 
-            console.log(`DEBUG: Wrapper for ${node.id.name}: initialStateId=${initialStateId}, outputRegister=${generator.outputRegister}`);
             const virtualizedFunction = functionWrapperTemplate
                 .replace("%FN_PREFIX%", node.async ? "async " : "")
                 .replace("%FUNCTION_NAME%", node.id.name)

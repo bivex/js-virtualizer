@@ -633,9 +633,6 @@ const implOpcode = {
         const fn = this.readByte(), dst = this.readByte(), funcThis = this.readByte(), argsReg = this.readByte();
         const args = this.read(argsReg);
         const fnVal = this.read(fn);
-        if (fnVal === null || fnVal === undefined) {
-            console.log(`ERROR: FUNC_ARRAY_CALL: Function at register ${ fn } is ${ fnVal }! Register ${ funcThis } (this) is ${ this.read(funcThis) }`);
-        }
         const res = fnVal.apply(this.read(funcThis), args);
         this.write(dst, res);
     },
@@ -893,9 +890,7 @@ const implOpcode = {
     },
     SET_REF: function () {
         const dest = this.readByte(), src = this.readByte();
-        const val = this.read(src);
-        console.log(`SET_REF: Writing ${ val } from register ${ src } to register ${ dest }`);
-        this.write(dest, val);
+        this.write(dest, this.read(src));
     },
     WRITE_EXT: function () {
         const dest = this.readByte(), src = this.readByte();
@@ -1745,5 +1740,5 @@ if (typeof module !== 'undefined' && module.exports) {
 } else if (typeof globalThis !== 'undefined') {
     globalThis.JSVM = JSVM;
 }
-JSVM.registerBytecodeKey('JSVK_a777ea432c76', 'yNKqoDLlbLmtSQYMd1ko0hD0KR7SkXlD');
-JSVM.registerBytecodeKey('JSVK_0eddb68da8f5', 'nPcz0UB0D4RDiL8iYw5xmebF91LljUNX');
+JSVM.registerBytecodeKey('JSVK_24b0cfbb324a', 'gNMNZHnr6bUJfFIqnWsovbaqNZAnvQv3');
+JSVM.registerBytecodeKey('JSVK_3c2be3dacbc8', 'IF1rNh8LddRffJpcbvbVYkor4tobczQy');

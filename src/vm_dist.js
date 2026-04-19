@@ -642,9 +642,6 @@ const implOpcode = {
         const fn = this.readByte(), dst = this.readByte(), funcThis = this.readByte(), argsReg = this.readByte();
         const args = this.read(argsReg);
         const fnVal = this.read(fn);
-        if (fnVal === null || fnVal === undefined) {
-            console.log(`ERROR: FUNC_ARRAY_CALL: Function at register ${fn} is ${fnVal}! Register ${funcThis} (this) is ${this.read(funcThis)}`);
-        }
         const res = fnVal.apply(this.read(funcThis), args);
         this.write(dst, res);
     }, FUNC_ARRAY_CALL_AWAIT: async function () {
@@ -894,9 +891,7 @@ const implOpcode = {
         this.write(dest, src);
     }, SET_REF: function () {
         const dest = this.readByte(), src = this.readByte();
-        const val = this.read(src);
-        console.log(`SET_REF: Writing ${val} from register ${src} to register ${dest}`);
-        this.write(dest, val);
+        this.write(dest, this.read(src));
     }, WRITE_EXT: function () {
         const dest = this.readByte(), src = this.readByte();
         const ref = this.read(dest);
