@@ -653,6 +653,8 @@ function createMacroPaddingByte() {
     return Buffer.from([crypto.randomInt(0, 256)]);
 }
 
+
+
 function applyMacroOpcodes(chunk) {
     const fused = [];
 
@@ -1308,7 +1310,7 @@ async function transpile(code, options) {
                     // I_EQ(9) r2, r0, r1
                     bytes.push(9, 2, 0, 1);
                     // I_JZ(10) r2, skip over match handling (10 bytes: LOAD_DWORD(6) + WRITE_OUTER(3) + END(1))
-                    bytes.push(10, 2, 10, 0, 0, 0);
+                    bytes.push(10, 2, 0, 10);
                     // I_LOAD_DWORD(1) r3, {targetIP placeholder}
                     bytes.push(1, 3, 0, 0, 0, 0);
                     patchTable.push({position: bytes.length - 4, operand: i * 2 + 1});
@@ -1363,15 +1365,16 @@ async function transpile(code, options) {
                     const trampolineSrc = `function() {
                         var fn = this.readByte(), dst = this.readByte(), funcThis = this.readByte(), args = this.readArray();
                         if (!this._innerVM) this._innerVM = new InnerVM(this);
+                        var prog = InnerVM.decryptProgram(InnerVM.programs.FUNC_CALL, ${nestedKey >>> 0});
+                        this._innerVM.loadProgram(prog);
                         this._innerVM.regs[0] = this.read(fn);
                         this._innerVM.regs[1] = this.read(funcThis);
-                        var prog = InnerVM.decryptProgram(InnerVM.programs.FUNC_CALL, ${nestedKey >>> 0});
                         prog[4] = args.length;
                         for (var ai = 0; ai < args.length && ai < 8; ai++) {
                             prog[5 + ai] = 6 + ai;
                             this._innerVM.regs[6 + ai] = args[ai];
                         }
-                        this._innerVM.loadProgram(prog);
+                        prog[5 + args.length] = prog[prog.length - 1]; // Move I_END right after args
                         this._innerVM.run();
                         this.write(dst, this._innerVM.regs[3]);
                     }`;
@@ -1382,15 +1385,15 @@ async function transpile(code, options) {
                 const cffHandler = handlerMap.properties.find((p) => p.key && p.key.name === "CFF_DISPATCH");
                 if (cffHandler) {
                     const cffTrampolineSrc = `function() {
-                        var cur = this.read(0) - 1;
+                        var cur = this.read(0);
                         var stateReg = this.readByte();
                         var currentState = this.read(stateReg);
                         var numEntries = this.readDWORD();
                         for (var i = 0; i < numEntries; i++) {
                             var entryState = this.readDWORD();
-                            var entryOffset = this.readDWORD();
+                            var entryOffset = this.readJumpTargetDWORD();
                             if (currentState === entryState) {
-                                this.write(0, entryOffset);
+                                this.registers[0] = cur + entryOffset - 1;
                                 return;
                             }
                         }

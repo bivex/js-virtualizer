@@ -45,50 +45,17 @@ function compileAddInnerBytecode() {
  * Inner bytecode reads outer regs, builds args, calls, writes result.
  */
 function compileFuncCallInnerBytecode() {
-    // Layout: I_READ_OUTER r0, {fn_reg}
-    //         I_READ_OUTER r1, {funcThis_reg}
-    //         I_LOAD_BYTE r2, {args_count}
-    //         (for each arg: I_READ_OUTER r6+i, {args[i]})
-    //         I_CALL r3, r0, r1, args_count, [arg regs...]
-    //         I_WRITE_OUTER {dst_reg}, r3
-    //         I_END
-    //
-    // Since we don't know args count at compile time, we use a max of 8 args.
-    // The trampoline patches the actual count and arg register indices.
-
     const MAX_ARGS = 8;
-
-    const patchTable = [
-        {position: 2, operand: 0},   // fn_reg
-        {position: 5, operand: 2}    // funcThis_reg
-    ];
-
     const bytes = [];
-
-    // I_READ_OUTER r0, {fn_reg}
-    bytes.push(op.I_READ_OUTER, 0, 0x00);
-    patchTable.push({position: bytes.length - 1, operand: 0}); // fn_reg placeholder
-
-    // I_READ_OUTER r1, {funcThis_reg}
-    bytes.push(op.I_READ_OUTER, 1, 0x00);
-    patchTable.push({position: bytes.length - 1, operand: 2}); // funcThis_reg placeholder
+    const patchTable = [];
 
     // I_CALL r3, r0, r1, {args_count}, [arg_value_0, arg_value_1, ...]
-    // I_CALL format: opcode, dest, fn_reg, this_reg, argc, val0, val1, ...
-    // The args values themselves are passed as pre-read outer register values
-    // So trampoline pre-reads each arg register's VALUE, not index
-    bytes.push(op.I_CALL, 3, 0, 1, 0x00); // argc placeholder at position bytes.length-1
-    const argcPatchPos = bytes.length - 1;
-
+    bytes.push(op.I_CALL, 3, 0, 1, 0x00); // argc placeholder at position 4
+    
     // Reserve space for MAX_ARGS arg values (patched by trampoline)
     for (let i = 0; i < MAX_ARGS; i++) {
         bytes.push(0x00); // arg value placeholder
-        patchTable.push({position: bytes.length - 1, operand: 3 + i}); // args[0..7] values
     }
-
-    // I_WRITE_OUTER {dst_reg}, r3
-    bytes.push(op.I_WRITE_OUTER, 0x00, 3);
-    patchTable.push({position: bytes.length - 2, operand: 1}); // dst_reg placeholder
 
     // I_END
     bytes.push(op.I_END);
