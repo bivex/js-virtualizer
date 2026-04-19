@@ -542,7 +542,7 @@ function applyMultiChunkControlFlowFlattening(chunks, cffStateReg, options = {})
     shuffleArray(blockIndices);
 
     const numEntries = allRewrittenBlocks.length;
-    const realHeaderSize = 1 + 5; // NOP(1) + JUMP_UNCONDITIONAL(5)
+    const realHeaderSize = 6 + 5; // LOAD_DWORD(6) + JUMP_UNCONDITIONAL(5)
     const realDispatchByteOffset = realHeaderSize;
 
     const dispatchData = Buffer.alloc(1 + 4 + numEntries * 8);
@@ -573,8 +573,8 @@ function applyMultiChunkControlFlowFlattening(chunks, cffStateReg, options = {})
 
     const dispatchOpcode = new Opcode("CFF_DISPATCH", dispatchData);
     const resultOpcodes = [
-        new Opcode("NOP"), // To be replaced by caller if needed
-        new Opcode("JUMP_UNCONDITIONAL", encodeDWORD(realDispatchByteOffset - 1, polyEndian)), // JUMP dispatch
+        new Opcode("LOAD_DWORD", 0, encodeDWORD(0, polyEndian)), // Placeholder for state init
+        new Opcode("JUMP_UNCONDITIONAL", encodeDWORD(realDispatchByteOffset - 6, polyEndian)), // JUMP dispatch (cur is at IP=7)
         dispatchOpcode
     ];
 

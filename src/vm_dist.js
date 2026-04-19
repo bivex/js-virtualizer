@@ -432,8 +432,12 @@ function unpackBytecodeEnvelope(code, format, key) {
     }
 
     const salt = code.slice(start, saltEnd);
-    const expectedDigest = code.slice(saltEnd + 1, digestEnd);
-    const payload = code.slice(digestEnd + 1);
+    const parts = code.split(":");
+    const hasFlags = parts.length >= 5;
+    const expectedDigest = hasFlags ? parts[3] : parts[2];
+    const payload = hasFlags ? parts.slice(4).join(":") : parts.slice(3).join(":");
+    const flags = hasFlags ? normalizeEnvelopeFlags(parts[2]) : "";
+
     const actualDigest = createBytecodeIntegrityDigest(payload, salt, key, format);
 
     if (expectedDigest !== actualDigest) {
@@ -443,9 +447,9 @@ function unpackBytecodeEnvelope(code, format, key) {
     return {
         payload,
         encrypted: false,
-        statefulOpcodes: false,
-        jumpTargetEncoding: false,
-        perInstructionEncoding: false
+        statefulOpcodes: flags.includes("S"),
+        jumpTargetEncoding: flags.includes("J"),
+        perInstructionEncoding: flags.includes("I")
     };
 }
 
@@ -1122,10 +1126,11 @@ class JSVM {
         return createBytecodeIntegrityDigest(code, salt, key, format)
     }
 
-    static createBytecodeIntegrityEnvelope(code, format, key, salt) {
+    static createBytecodeIntegrityEnvelope(code, format, key, salt, flags = "SJ") {
         const normalizedSalt = String(salt ?? "");
+        const normalizedFlags = normalizeEnvelopeFlags(flags);
         const digest = createBytecodeIntegrityDigest(code, normalizedSalt, key, format);
-        return `${BYTECODE_INTEGRITY_PREFIX}:${normalizedSalt}:${digest}:${code}`;
+        return `${BYTECODE_INTEGRITY_PREFIX}:${normalizedSalt}:${normalizedFlags}:${digest}:${code}`;
     }
 
     static registerBytecodeKey(keyId, key) {
@@ -1534,15 +1539,13 @@ class JSVM {
     }
 
     readOpcode() {
-        const position = this.read(registers.INSTRUCTION_POINTER)
+        const position = this.read(0)
         this.currentInstructionBase = position
         const opcode = this.readRawByte()
-
-        if (opcode === undefined) {
-            return {
-                opcode,
-                position
-            }
+        if (globalThis.__JSVM_DEBUG__) {
+            const decoded = (!this.statefulOpcodesEnabled || !this.opcodeStateSeed) ? opcode : decodeStatefulOpcode(opcode, position, this.opcodeStateSeed);
+            const opName = opNames[decoded] || "UNKNOWN";
+            console.log(`[VM] IP=${position} Opcode=${decoded} (${opName})`);
         }
 
         if (!this.statefulOpcodesEnabled || !this.opcodeStateSeed) {

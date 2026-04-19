@@ -96,7 +96,7 @@ describe("nested VM", () => {
         const result = await transpile(code, {
             fileName: "nested_disabled.js",
             passes: ["RemoveUnused"],
-            nestedVM: true
+            nestedVM: false
         });
 
         expect(result.vm).not.toContain("InnerVM");

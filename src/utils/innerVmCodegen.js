@@ -138,8 +138,13 @@ class InnerVM {
     }
 
     run() {
-        while (this._running) {
+        while (this.ip < this.program.length) {
             var opcode = this.program[this.ip++];
+            if (globalThis.__JSVM_DEBUG__) {
+                var names = ["LOAD_BYTE", "LOAD_DWORD", "READ_OUTER", "WRITE_OUTER", "ADD", "SUBTRACT", "XOR", "AND", "SHL", "EQ", "JZ", "CALL", "READ_PROP", "ARR_READ", "NOP", "END"];
+                console.log("[NESTED] IP=" + (this.ip-1) + " Op=" + names[opcode] + " Regs=" + JSON.stringify(this.regs.slice(0, 8)));
+            }
+            if (opcode === 15 /* I_END */) break;
             var handler = this.handlers[opcode];
             if (!handler) break;
             handler.call(this);
