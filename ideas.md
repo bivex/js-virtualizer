@@ -7,20 +7,19 @@ Insert compile-time-known conditions that are non-obvious during static analysis
 
 **CFF compatibility:** Opaque predicate insertion avoids splitting `SET` + `JUMP_UNCONDITIONAL` pairs that form CFF transition stubs, preserving correctness of state-machine transitions.
 
+### 2. Control Flow Flattening at Bytecode Level ✅
+Transform the VM dispatch loop into a finite state machine with a state variable. Each basic block becomes a case in a switch, transitions go through the state variable. Standard in commercial protectors (VMProtect, Themida). Implemented in `src/utils/cff.js`.
+
+**setSizeFix:** State variable uses `LOAD_DWORD` instead of `SET` to avoid truncation issues and improve compatibility with anti-dump restoration. Ensures full 32-bit state preservation across VM boundaries.
+
 **Option API:**
 ```js
 await transpile(source, {
-    opaquePredicates: true,  // default: true
+    controlFlowFlattening: true,  // default: true
 });
 ```
 
-**Backward compatibility:** `polymorphic: false` falls back to fixed big-endian ISA with no register scrambling.
-
----
-
-## Completed
-
-### 5. Anti-Dump / Memory Scrubbing After Decryption ✅
+### 3. Anti-Dump / Memory Scrubbing After Decryption ✅
 Erase previous bytecode chunks after decryption. A memory dump at pause time yields incomplete/corrupted bytecode.
 
 **Implemented in:** `src/vm_dev.js` + `src/vm_dist.js` (`enableAntiDump`, `scrubBytecodeRange`, `antiDumpBackup` backup + `restoreAntiDumpBytecodeRange` for backward jump restoration), `src/transpile.js` (`antiDump` option, key generation), `src/templates/functionWrapper.template` (`%ANTI_DUMP_SETUP%`), `src/utils/opcodes.js` (fork propagation).
@@ -40,16 +39,18 @@ Erase previous bytecode chunks after decryption. A memory dump at pause time yie
 **Option API:**
 ```js
 await transpile(source, {
-    antiDump: true,  // default: true
+    opaquePredicates: true,  // default: true
 });
 ```
 
----
+**Backward compatibility:** `polymorphic: false` falls back to fixed big-endian ISA with no register scrambling.
 
-### 6. Environmental Locking ✅
+### 4. Environmental Locking ✅
 Bind execution to `window.location.hostname`, browser fingerprint, or environment hash. Bytecode simply does not execute in a different context.
 
 **Implemented in:** `src/transpile.js` (hostname-based lock via `environmentLock` option), `src/templates/functionWrapper.template` (`%ENVIRONMENT_LOCK_SETUP%`).
+
+**Browser fingerprint example with code interleaving:** The VM now includes `hashString` helper to fingerprint browser properties and interleaves dead instructions between real VM code, making extraction and analysis significantly harder.
 
 **Option API:**
 ```js
@@ -60,7 +61,7 @@ await transpile(source, {
 });
 ```
 
-**How it works:** The transpiler injects a runtime check that compares `window.location.hostname` (browser) or `os.hostname()` (Node) against the expected value. If mismatched, the VM silently produces garbage results instead of crashing (anti-tampering).
+**How it works:** The transpiler injects a runtime check that compares `window.location.hostname` (browser) or `os.hostname()` (Node) against the expected value. If mismatched, the VM silently produces garbage results instead of crashing (anti-tampering). The code interleaving spreads dead instructions throughout the VM body, further complicating analysis.
 
 ---
 
