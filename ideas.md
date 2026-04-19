@@ -5,38 +5,12 @@
 ### 1. Opaque Predicates ✅
 Insert compile-time-known conditions that are non-obvious during static analysis. Always-true branches carry real code, always-false branches carry junk. Complicates symbolic execution and deobfuscation. Implemented in `src/utils/opaquePredicates.js`.
 
-### 2. Control Flow Flattening at Bytecode Level ✅
-Transform the VM dispatch loop into a finite state machine with a state variable. Each basic block becomes a case in a switch, transitions go through the state variable. Standard in commercial protectors (VMProtect, Themida). Implemented in `src/utils/cff.js`.
-
-### 4. Self-Modifying Bytecode ✅
-Bytecode mutates itself during execution — upcoming instructions decode only after preceding ones execute. Kills memory dumps and static disassemblers. Implemented in `src/vm_dev.js` + `src/vm_dist.js`.
-
----
-
-## Completed
-
-### 3. Polymorphic VM ✅
-
-Generate a fundamentally different instruction set architecture per build. Each build requires separate reverse engineering. Defeats automated devirtualizers that target a fixed ISA.
-
-**Implemented in:** `src/transpile.js` (`buildRegisterScramble`, `polyEndian` derivation), `src/utils/BytecodeGenerator.js` (register scramble map), `src/utils/opaquePredicates.js` (poly-aware), `src/utils/cff.js` (polyEndian), `src/vm_dev.js` + `src/vm_dist.js` (runtime endian/encoding support).
-
-**What varies per build:**
-
-| Axis | Implementation | Effect |
-|---|---|---|
-| Register scrambling | Per-build scramble map derived from integrity key seed | Register 5 in source → scrambled physical index |
-| Immediate encoding | BE or LE endianness derived from integrity key parity | DWORD values stored differently per build |
-| VM profile | Random register count (96–256), dispatcher variant, alias counts, decoy slots | Each function gets unique VM configuration |
-| Opcode encoding | Stateful + position-based + per-instruction byte encoding | Same opcode has different bytes at different positions |
-| Jump target encoding | Seed-derived jump target obfuscation | Jump offsets are encrypted per-build |
-| Opaque scratch registers | Scrambled through poly map | Predicate registers differ per build |
-| Dead code | Random decoy sequences with per-build register selection | Bait instructions use different registers |
+**CFF compatibility:** Opaque predicate insertion avoids splitting `SET` + `JUMP_UNCONDITIONAL` pairs that form CFF transition stubs, preserving correctness of state-machine transitions.
 
 **Option API:**
 ```js
 await transpile(source, {
-    polymorphic: true,  // default: true
+    opaquePredicates: true,  // default: true
 });
 ```
 
@@ -49,14 +23,19 @@ await transpile(source, {
 ### 5. Anti-Dump / Memory Scrubbing After Decryption ✅
 Erase previous bytecode chunks after decryption. A memory dump at pause time yields incomplete/corrupted bytecode.
 
-**Implemented in:** `src/vm_dev.js` + `src/vm_dist.js` (`enableAntiDump`, `scrubBytecodeRange`, high-water-mark tracking), `src/transpile.js` (`antiDump` option, key generation), `src/templates/functionWrapper.template` (`%ANTI_DUMP_SETUP%`), `src/utils/opcodes.js` (fork propagation).
+**Implemented in:** `src/vm_dev.js` + `src/vm_dist.js` (`enableAntiDump`, `scrubBytecodeRange`, `antiDumpBackup` backup + `restoreAntiDumpBytecodeRange` for backward jump restoration), `src/transpile.js` (`antiDump` option, key generation), `src/templates/functionWrapper.template` (`%ANTI_DUMP_SETUP%`), `src/utils/opcodes.js` (fork propagation).
 
 **How it works:**
+- On `loadFromString`, creates `antiDumpBackup` storing original bytes before any scrubbing
 - Each executed instruction's bytecode is overwritten with seed-derived garbage (irreversible)
 - A high-water mark tracks the furthest point reached — only scrubbing forward, never re-scrubbing already-scrubbed bytes
-- On backward jumps (loops), `restoreBytecodeRange` restores code from backup, then re-execution scrubs it again
+- On **backward jumps** (loops, CFF state transitions), `restoreAntiDumpBytecodeRange` restores code from backup before re-execution, ensuring correctness while still scrubbing after execution
 - Fork (nested VM calls) inherits `antiDump` + `antiDumpSeed` and starts with a fresh high-water mark
 - After VM finishes, the entire bytecode buffer is scrubbed — a memory dump yields only garbage
+
+**Compatibility fixes:**
+- ✅ **CFF integration:** `CFF_DISPATCH` added to jump opcode list so state-machine backward transitions also trigger restoration
+- ✅ **Opaque predicates:** Predicate insertion avoids splitting `SET` + `JUMP_UNCONDITIONAL` pairs that form CFF transition stubs, preventing incorrect restoration triggers
 
 **Option API:**
 ```js
