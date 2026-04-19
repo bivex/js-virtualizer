@@ -967,6 +967,60 @@ const implOpcode = {
     }
 };
 
+// --- Dispatch Loop Obfuscation ---
+// Phase constants for obfuscated dispatch loop
+const PHASE_FETCH = 0;
+const PHASE_DECODE = 1;
+const PHASE_PRE_EXEC = 2;
+const PHASE_EXECUTE = 3;
+const PHASE_POST = 4;
+const PHASE_DUMMY = 5;
+const PHASE_END = 6;
+
+function createDispatchObfuscationProfile(key) {
+    const normalizedKey = String(key ?? "");
+    let seed = 0x243f6a88;
+    for (let i = 0; i < normalizedKey.length; i++) {
+        seed = Math.imul((seed ^ normalizedKey.charCodeAt(i)) >>> 0, 0x1bbcd9b5) >>> 0;
+    }
+
+    // Real phases in execution order (must stay ordered)
+    const realPhases = [PHASE_FETCH, PHASE_DECODE, PHASE_PRE_EXEC, PHASE_EXECUTE, PHASE_POST];
+    const realCount = realPhases.length;
+    // Insert 2-4 dummy phases per cycle at random positions
+    const dummyCount = 2 + (seed % 3);
+    const totalSlots = realCount + dummyCount;
+
+    // Build the phase table: place dummies at seeded random positions, real phases in order
+    const phaseTable = [];
+
+    // Determine which positions get dummies
+    const dummyPositions = new Set();
+    let s = seed;
+    while (dummyPositions.size < dummyCount) {
+        s = Math.imul(s ^ (s >>> 16), 0x45d9f3b) >>> 0;
+        const pos = s % totalSlots;
+        dummyPositions.add(pos);
+    }
+
+    // Build table: dummies at their positions, real phases fill remaining slots in order
+    let realIdx = 0;
+    for (let i = 0; i < totalSlots; i++) {
+        if (dummyPositions.has(i)) {
+            phaseTable.push(PHASE_DUMMY);
+        } else {
+            phaseTable.push(realPhases[realIdx++]);
+        }
+    }
+
+    return {
+        phaseTable,
+        realSlotIndices,
+        totalSlots,
+        seed,
+    };
+}
+
 module.exports = {
     BYTECODE_INTEGRITY_PREFIX,
     BYTECODE_ENCRYPTED_PREFIX,
@@ -1013,5 +1067,13 @@ module.exports = {
     opcodes,
     implOpcode,
     DEFAULT_VM_PROFILE,
-    normalizeVMProfile
+    normalizeVMProfile,
+    PHASE_FETCH,
+    PHASE_DECODE,
+    PHASE_PRE_EXEC,
+    PHASE_EXECUTE,
+    PHASE_POST,
+    PHASE_DUMMY,
+    PHASE_END,
+    createDispatchObfuscationProfile
 };

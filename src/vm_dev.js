@@ -54,8 +54,18 @@ const {
     createRegisterReference,
     restoreProtectedRegisterValue,
     DEFAULT_VM_PROFILE,
-    normalizeVMProfile
+    normalizeVMProfile,
+    PHASE_FETCH,
+    PHASE_DECODE,
+    PHASE_PRE_EXEC,
+    PHASE_EXECUTE,
+    PHASE_POST,
+    PHASE_DUMMY,
+    PHASE_END,
+    createDispatchObfuscationProfile
 } = vmCommon;
+
+const { createTimeLockState, solveTimeLock, verifyTimeLock } = require("./utils/timeLock");
 
 const {log, LogData} = require("./utils/log");
 const zlib = require("node:zlib");
@@ -437,6 +447,27 @@ class JSVM {
             const mask = ((this.antiDumpSeed ^ Math.imul(i + 1, 0x85ebca6b)) >>> 0) & 0xFF
             this.code[i] = mask
         }
+    }
+
+    enableTimeLock(key) {
+        this.timeLockState = createTimeLockState(key)
+        return this
+    }
+
+    solveTimeLockChallenge() {
+        if (!this.timeLockState) return
+        const solutionHash = solveTimeLock(this.timeLockState)
+        this.runtimeOpcodeState = mixRuntimeOpcodeState(
+            this.runtimeOpcodeState || this.runtimeDispatchSeed || 0x4f1bbcdc,
+            solutionHash & 0xFF,
+            (solutionHash >>> 8) & 0xFF,
+            solutionHash >>> 16
+        )
+    }
+
+    enableDispatchObfuscation(key) {
+        this.dispatchObfuscationProfile = createDispatchObfuscationProfile(key)
+        return this
     }
 
     runAntiDebugSweep(position) {
@@ -863,12 +894,99 @@ class JSVM {
         })
     }
 
+    // --- Dispatch Loop Obfuscation: Phase Handlers ---
+
+    _phaseFetch() {
+        this._tl_opcodeResult = this.readOpcode()
+    }
+
+    _phaseDecode() {
+        const {opcode, position} = this._tl_opcodeResult
+        if (opcode === undefined || opNames[opcode] === "END") {
+            this._tl_opcodeResult._end = true
+            if (this.antiDump && position !== undefined && this.code) {
+                this.scrubBytecodeRange(this.antiDumpHighWaterMark, position)
+            }
+            this.currentInstructionBase = null
+            return
+        }
+        this._tl_opcodeResult._end = false
+        this.runAntiDebugSweep(position)
+        this._tl_handler = this.resolveOpcodeHandler(opcode, position)
+    }
+
+    _phasePreExec() {
+        if (this._tl_opcodeResult._end) return
+        const {opcode, position} = this._tl_opcodeResult
+        if (!this._tl_handler) {
+            log(`[IP = ${this.read(registers.INSTRUCTION_POINTER) - 1}]: Unknown opcode ${opcode}`)
+            this.advanceRuntimeOpcodeState(opcode, position)
+            this.rotateProtectedRegisters()
+            this.currentInstructionBase = null
+            this._tl_opcodeResult._nop = true
+        } else {
+            this._tl_opcodeResult._nop = false
+            log(`[IP = ${position}]: Executing ${opNames[opcode]}`)
+        }
+    }
+
+    _phaseExecute() {
+        if (this._tl_opcodeResult._end || this._tl_opcodeResult._nop) return
+        this._tl_handler()
+    }
+
+    _phasePostExec() {
+        if (this._tl_opcodeResult._nop) return
+        const {opcode, position} = this._tl_opcodeResult
+        this.advanceRuntimeOpcodeState(opcode, position)
+        this.rotateProtectedRegisters()
+        if (this.selfModifyingBytecode && position !== undefined && this.code) {
+            const currentIP = this.read(registers.INSTRUCTION_POINTER)
+            this.scrambleInstruction(position, currentIP)
+        }
+        if (this.antiDump && position !== undefined && this.code) {
+            const currentIP = this.read(registers.INSTRUCTION_POINTER)
+            const scrubEnd = Math.min(currentIP, this.code.length)
+            this.scrubBytecodeRange(this.antiDumpHighWaterMark, scrubEnd)
+            if (scrubEnd > this.antiDumpHighWaterMark) {
+                this.antiDumpHighWaterMark = scrubEnd
+            }
+        }
+        this.currentInstructionBase = null
+    }
+
+    _phaseDummy() {
+        this.runtimeOpcodeState = Math.imul(
+            (this.runtimeOpcodeState ^ (this.runtimeOpcodeState >>> 8)) >>> 0,
+            0x45d9f3b
+        ) >>> 0
+    }
+
     run() {
         this.executionMode = "sync"
+        if (this.timeLockState) this.solveTimeLockChallenge()
+
+        if (this.dispatchObfuscationProfile) {
+            const profile = this.dispatchObfuscationProfile
+            const phases = [
+                () => this._phaseFetch(),
+                () => this._phaseDecode(),
+                () => this._phasePreExec(),
+                () => this._phaseExecute(),
+                () => this._phasePostExec(),
+                () => this._phaseDummy(),
+            ]
+            while (true) {
+                for (let i = 0; i < profile.totalSlots; i++) {
+                    phases[profile.phaseTable[i]]()
+                    if (profile.phaseTable[i] === PHASE_DECODE && this._tl_opcodeResult._end) return
+                }
+            }
+        }
+
         while (true) {
             const {opcode, position} = this.readOpcode()
             if (opcode === undefined || opNames[opcode] === "END") {
-                // treat as end
                 log(`[IP = ${this.read(registers.INSTRUCTION_POINTER) - 1}]: End of execution`)
                 if (this.antiDump && position !== undefined && this.code) {
                     this.scrubBytecodeRange(this.antiDumpHighWaterMark, position)
@@ -880,7 +998,6 @@ class JSVM {
             const handler = this.resolveOpcodeHandler(opcode, position)
             if (!handler) {
                 log(`[IP = ${this.read(registers.INSTRUCTION_POINTER) - 1}]: Unknown opcode ${opcode}`)
-                // treat as NOP
                 this.advanceRuntimeOpcodeState(opcode, position)
                 this.rotateProtectedRegisters()
                 this.currentInstructionBase = null
@@ -914,10 +1031,30 @@ class JSVM {
 
     async runAsync() {
         this.executionMode = "async"
+        if (this.timeLockState) this.solveTimeLockChallenge()
+
+        if (this.dispatchObfuscationProfile) {
+            const profile = this.dispatchObfuscationProfile
+            const phases = [
+                () => this._phaseFetch(),
+                () => this._phaseDecode(),
+                () => this._phasePreExec(),
+                () => this._phaseExecute(),
+                async () => { await this._tl_handler() },
+                () => this._phasePostExec(),
+                () => this._phaseDummy(),
+            ]
+            while (true) {
+                for (let i = 0; i < profile.totalSlots; i++) {
+                    await phases[profile.phaseTable[i]]()
+                    if (profile.phaseTable[i] === PHASE_DECODE && this._tl_opcodeResult._end) return
+                }
+            }
+        }
+
         while (true) {
             const {opcode, position} = this.readOpcode()
             if (opcode === undefined || opNames[opcode] === "END") {
-                // treat as end
                 log(`[IP = ${this.read(registers.INSTRUCTION_POINTER) - 1}]: End of execution`)
                 if (this.antiDump && position !== undefined && this.code) {
                     this.scrubBytecodeRange(this.antiDumpHighWaterMark, position)
@@ -929,7 +1066,6 @@ class JSVM {
             const handler = this.resolveOpcodeHandler(opcode, position)
             if (!handler) {
                 log(`[IP = ${this.read(registers.INSTRUCTION_POINTER) - 1}]: Unknown opcode ${opcode}`)
-                // treat as NOP
                 this.advanceRuntimeOpcodeState(opcode, position)
                 this.rotateProtectedRegisters()
                 this.currentInstructionBase = null

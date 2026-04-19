@@ -101,11 +101,25 @@ Not just dead code tails — interleave junk instructions between real ones that
 ### 10. White-Box Key Encryption
 Replace the current XOR cipher with a white-box AES/construction where the key is inseparable from the decryption code.
 
-### 11. Time-Lock / Proof-of-Work
-Bytecode contains a built-in computational delay that cannot be accelerated. Protects against automated brute-force analysis.
+### 11. Time-Lock / Proof-of-Work ✅
+Before the dispatch loop starts, solve a hash-chain PoW challenge. The solution is mixed into `runtimeOpcodeState`, so skipping silently corrupts dispatch. Fixed ~12-bit difficulty (~50-200ms delay per invocation). Implemented in `src/utils/timeLock.js`, `src/vm_dev.js` + `src/vm_dist.js` (`enableTimeLock`, `solveTimeLockChallenge`).
 
-### 12. Dispatch Loop Obfuscation
-The `run()` loop is relatively readable. Run it through control flow flattening + indirect calls to make the dispatch mechanism itself harder to analyze.
+**Option API:**
+```js
+await transpile(source, {
+    timeLock: true,  // default: false
+});
+```
+
+### 12. Dispatch Loop Obfuscation ✅
+The `run()` loop is replaced with a phase-based state machine with indirect dispatch. Phase functions (FETCH, DECODE, PRE_EXEC, EXECUTE, POST) are stored in a shuffled array with dummy phases interleaved. The shuffle order is seeded per build. No readable `while(true)` pattern in output. Implemented in `src/utils/vmCommon.js` (`createDispatchObfuscationProfile`), `src/vm_dev.js` + `src/vm_dist.js` (`enableDispatchObfuscation`, phase handlers).
+
+**Option API:**
+```js
+await transpile(source, {
+    dispatchObfuscation: true,  // default: true
+});
+```
 
 ---
 

@@ -770,6 +770,8 @@ async function transpile(code, options) {
     options.polymorphic = options.polymorphic ?? true;
     options.antiDump = options.antiDump ?? true;
     options.nestedVM = options.nestedVM ?? false;
+    options.timeLock = options.timeLock ?? false;
+    options.dispatchObfuscation = options.dispatchObfuscation ?? true;
     options.environmentLock = options.environmentLock ?? null;
     options.vmObfuscationTarget = options.vmObfuscationTarget ?? "node";
     options.transpiledObfuscationTarget = options.transpiledObfuscationTarget ?? "node";
@@ -851,6 +853,8 @@ async function transpile(code, options) {
         const antiDebugKey = crypto.randomBytes(16).toString("hex");
         const selfModifyKey = crypto.randomBytes(16).toString("hex");
         const antiDumpKey = crypto.randomBytes(16).toString("hex");
+        const timeLockKey = crypto.randomBytes(16).toString("hex");
+        const dispatchObfuscationKey = crypto.randomBytes(16).toString("hex");
         // Polymorphic configuration: derive endianness from integrityKey
         const polyEndian = options.polymorphic
             ? (parseInt(integrityKey.slice(0, 8), 16) & 1 ? "LE" : "BE")
@@ -1050,6 +1054,12 @@ async function transpile(code, options) {
         const antiDumpSetup = options.antiDump !== false
             ? `VM.enableAntiDump('${antiDumpKey}');`
             : "";
+        const timeLockSetup = options.timeLock
+            ? `VM.enableTimeLock('${timeLockKey}');`
+            : "";
+        const dispatchObfuscationSetup = options.dispatchObfuscation !== false
+            ? `VM.enableDispatchObfuscation('${dispatchObfuscationKey}');`
+            : "";
 
         const environmentCheck = options.environmentLock
             ? (() => {
@@ -1070,6 +1080,8 @@ async function transpile(code, options) {
             .replace("%MEMORY_PROTECTION_SETUP%", options.memoryProtection ? `VM.enableMemoryProtection('${memoryProtectionKey}');` : "")
             .replace("%SELF_MODIFY_SETUP%", selfModifySetup)
             .replace("%ANTI_DUMP_SETUP%", antiDumpSetup)
+            .replace("%TIME_LOCK_SETUP%", timeLockSetup)
+            .replace("%DISPATCH_OBFUSCATION_SETUP%", dispatchObfuscationSetup)
             .replace("%BYTECODE_INTEGRITY_KEY%", integrityKey)
             .replace("%ANTI_DEBUG_SETUP%", `VM.enableAntiDebug('${antiDebugKey}');`)
             .replace("%CFF_STATE_INIT%", cffInit)

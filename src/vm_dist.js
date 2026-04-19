@@ -581,6 +581,85 @@ function inflateBytecode(buffer) {
     throw new Error("Compressed browser bytecode requires globalThis.pako.inflate");
 }
 
+// --- Time-Lock / Proof-of-Work ---
+const TIMELOCK_DEFAULT_DIFFICULTY = 12;
+
+function timeLockHashStep(state) {
+    state = Math.imul(state ^ (state >>> 16), 0x45d9f3b) >>> 0;
+    state = ((state << 13) | (state >>> 19)) >>> 0;
+    state = Math.imul(state ^ (state >>> 16), 0x1bbcd9b5) >>> 0;
+    return state;
+}
+
+function createTimeLockState(key) {
+    const normalizedKey = String(key ?? "");
+    let seed = 0x6a09e667;
+    for (let i = 0; i < normalizedKey.length; i++) {
+        seed = Math.imul((seed ^ normalizedKey.charCodeAt(i)) >>> 0, 0x5bd1e995) >>> 0;
+    }
+    return {
+        challengeSeed: timeLockHashStep(seed),
+        difficulty: TIMELOCK_DEFAULT_DIFFICULTY,
+        solutionHash: 0,
+    };
+}
+
+function solveTimeLock(state) {
+    const { challengeSeed, difficulty } = state;
+    const mask = (0xFFFFFFFF >>> (32 - difficulty)) << (32 - difficulty);
+    let nonce = 0;
+    let h = challengeSeed;
+    while (true) {
+        h = timeLockHashStep(Math.imul(challengeSeed ^ nonce, 0x5bd1e995) >>> 0);
+        if ((h & mask) === 0) break;
+        nonce = (nonce + 1) >>> 0;
+        if (nonce > 0x00FFFFFF) nonce = (nonce * 3 + 7) >>> 0;
+    }
+    state.solutionHash = h;
+    return h;
+}
+
+// --- Dispatch Loop Obfuscation ---
+const PHASE_FETCH = 0;
+const PHASE_DECODE = 1;
+const PHASE_PRE_EXEC = 2;
+const PHASE_EXECUTE = 3;
+const PHASE_POST = 4;
+const PHASE_DUMMY = 5;
+
+function createDispatchObfuscationProfile(key) {
+    const normalizedKey = String(key ?? "");
+    let seed = 0x243f6a88;
+    for (let i = 0; i < normalizedKey.length; i++) {
+        seed = Math.imul((seed ^ normalizedKey.charCodeAt(i)) >>> 0, 0x1bbcd9b5) >>> 0;
+    }
+
+    const realPhases = [PHASE_FETCH, PHASE_DECODE, PHASE_PRE_EXEC, PHASE_EXECUTE, PHASE_POST];
+    const realCount = realPhases.length;
+    const dummyCount = 2 + (seed % 3);
+    const totalSlots = realCount + dummyCount;
+
+    const phaseTable = [];
+    const dummyPositions = new Set();
+    let s = seed;
+    while (dummyPositions.size < dummyCount) {
+        s = Math.imul(s ^ (s >>> 16), 0x45d9f3b) >>> 0;
+        const pos = s % totalSlots;
+        dummyPositions.add(pos);
+    }
+
+    let realIdx = 0;
+    for (let i = 0; i < totalSlots; i++) {
+        if (dummyPositions.has(i)) {
+            phaseTable.push(PHASE_DUMMY);
+        } else {
+            phaseTable.push(realPhases[realIdx++]);
+        }
+    }
+
+    return { phaseTable, totalSlots, seed };
+}
+
 const registerNames = ["INSTRUCTION_POINTER", "UNDEFINED", "VOID"]
 const opNames = ["LOAD_BYTE", "LOAD_BOOL", "LOAD_DWORD", "LOAD_FLOAT", "LOAD_STRING", "LOAD_ARRAY", "LOAD_OBJECT", "SETUP_OBJECT", "SETUP_ARRAY", "INIT_CONSTRUCTOR", "FUNC_CALL", "FUNC_ARRAY_CALL", "FUNC_ARRAY_CALL_AWAIT", "AWAIT", "VFUNC_CALL", "VFUNC_SETUP_CALLBACK", "VFUNC_RETURN", "JUMP_UNCONDITIONAL", "JUMP_EQ", "JUMP_NOT_EQ", "TRY_CATCH_FINALLY", "THROW", "THROW_ARGUMENT", "MACRO_LOAD_DWORD_PAIR", "MACRO_TEST_JUMP_EQ", "MACRO_TEST_JUMP_NOT_EQ", "CFF_DISPATCH", "SET", "SET_REF", "SET_PROP", "GET_PROP", "SET_INDEX", "GET_INDEX", "WRITE_EXT", "DETACH_REF", "SET_NULL", "SET_UNDEFINED", "EQ_COERCE", "EQ", "NOT_EQ_COERCE", "NOT_EQ", "LESS_THAN", "LESS_THAN_EQ", "GREATER_THAN", "GREATER_THAN_EQ", "TEST", "TEST_NEQ", "ADD", "SUBTRACT", "MULTIPLY", "DIVIDE", "MODULO", "POWER", "AND", "BNOT", "OR", "XOR", "SHIFT_LEFT", "SHIFT_RIGHT", "SPREAD", "SPREAD_INTO", "NOT", "NEGATE", "PLUS", "INCREMENT", "DECREMENT", "TYPEOF", "VOID", "DELETE", "LOGICAL_AND", "LOGICAL_OR", "LOGICAL_NULLISH", "GET_ITERATOR", "ITERATOR_NEXT", "ITERATOR_DONE", "ITERATOR_VALUE", "GET_PROPERTIES", "NOP", "END", "PRINT"]
 
@@ -1285,6 +1364,91 @@ class JSVM {
         }
     }
 
+    enableTimeLock(key) {
+        this.timeLockState = createTimeLockState(key)
+        return this
+    }
+
+    solveTimeLockChallenge() {
+        if (!this.timeLockState) return
+        const solutionHash = solveTimeLock(this.timeLockState)
+        this.runtimeOpcodeState = mixRuntimeOpcodeState(
+            this.runtimeOpcodeState || this.runtimeDispatchSeed || 0x4f1bbcdc,
+            solutionHash & 0xFF,
+            (solutionHash >>> 8) & 0xFF,
+            solutionHash >>> 16
+        )
+    }
+
+    enableDispatchObfuscation(key) {
+        this.dispatchObfuscationProfile = createDispatchObfuscationProfile(key)
+        return this
+    }
+
+    _phaseFetch() {
+        this._tl_opcodeResult = this.readOpcode()
+    }
+
+    _phaseDecode() {
+        const {opcode, position} = this._tl_opcodeResult
+        if (opcode === undefined || opNames[opcode] === "END") {
+            this._tl_opcodeResult._end = true
+            if (this.antiDump && position !== undefined && this.code) {
+                this.scrubBytecodeRange(this.antiDumpHighWaterMark, position)
+            }
+            this.currentInstructionBase = null
+            return
+        }
+        this._tl_opcodeResult._end = false
+        this.runAntiDebugSweep(position)
+        this._tl_handler = this.resolveOpcodeHandler(opcode, position)
+    }
+
+    _phasePreExec() {
+        if (this._tl_opcodeResult._end) return
+        const {opcode, position} = this._tl_opcodeResult
+        if (!this._tl_handler) {
+            this.advanceRuntimeOpcodeState(opcode, position)
+            this.rotateProtectedRegisters()
+            this.currentInstructionBase = null
+            this._tl_opcodeResult._nop = true
+        } else {
+            this._tl_opcodeResult._nop = false
+        }
+    }
+
+    _phaseExecute() {
+        if (this._tl_opcodeResult._end || this._tl_opcodeResult._nop) return
+        this._tl_handler()
+    }
+
+    _phasePostExec() {
+        if (this._tl_opcodeResult._nop) return
+        const {opcode, position} = this._tl_opcodeResult
+        this.advanceRuntimeOpcodeState(opcode, position)
+        this.rotateProtectedRegisters()
+        if (this.selfModifyingBytecode && position !== undefined && this.code) {
+            const currentIP = this.read(registers.INSTRUCTION_POINTER)
+            this.scrambleInstruction(position, currentIP)
+        }
+        if (this.antiDump && position !== undefined && this.code) {
+            const currentIP = this.read(registers.INSTRUCTION_POINTER)
+            const scrubEnd = Math.min(currentIP, this.code.length)
+            this.scrubBytecodeRange(this.antiDumpHighWaterMark, scrubEnd)
+            if (scrubEnd > this.antiDumpHighWaterMark) {
+                this.antiDumpHighWaterMark = scrubEnd
+            }
+        }
+        this.currentInstructionBase = null
+    }
+
+    _phaseDummy() {
+        this.runtimeOpcodeState = Math.imul(
+            (this.runtimeOpcodeState ^ (this.runtimeOpcodeState >>> 8)) >>> 0,
+            0x45d9f3b
+        ) >>> 0
+    }
+
     runAntiDebugSweep(position) {
         if (!this.antiDebugState || !this.antiDebugState.enabled) {
             return;
@@ -1710,6 +1874,26 @@ class JSVM {
 
     run() {
         this.executionMode = "sync"
+        if (this.timeLockState) this.solveTimeLockChallenge()
+
+        if (this.dispatchObfuscationProfile) {
+            const profile = this.dispatchObfuscationProfile
+            const phases = [
+                () => this._phaseFetch(),
+                () => this._phaseDecode(),
+                () => this._phasePreExec(),
+                () => this._phaseExecute(),
+                () => this._phasePostExec(),
+                () => this._phaseDummy(),
+            ]
+            while (true) {
+                for (let i = 0; i < profile.totalSlots; i++) {
+                    phases[profile.phaseTable[i]]()
+                    if (profile.phaseTable[i] === PHASE_DECODE && this._tl_opcodeResult._end) return
+                }
+            }
+        }
+
         while (true) {
             const {opcode, position} = this.readOpcode()
             if (opcode === undefined || opNames[opcode] === "END") {
@@ -1754,6 +1938,27 @@ class JSVM {
 
     async runAsync() {
         this.executionMode = "async"
+        if (this.timeLockState) this.solveTimeLockChallenge()
+
+        if (this.dispatchObfuscationProfile) {
+            const profile = this.dispatchObfuscationProfile
+            const phases = [
+                () => this._phaseFetch(),
+                () => this._phaseDecode(),
+                () => this._phasePreExec(),
+                () => this._phaseExecute(),
+                async () => { await this._tl_handler() },
+                () => this._phasePostExec(),
+                () => this._phaseDummy(),
+            ]
+            while (true) {
+                for (let i = 0; i < profile.totalSlots; i++) {
+                    await phases[profile.phaseTable[i]]()
+                    if (profile.phaseTable[i] === PHASE_DECODE && this._tl_opcodeResult._end) return
+                }
+            }
+        }
+
         while (true) {
             const {opcode, position} = this.readOpcode()
             if (opcode === undefined || opNames[opcode] === "END") {
