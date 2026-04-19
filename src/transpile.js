@@ -1389,14 +1389,18 @@ async function transpile(code, options) {
                         var stateReg = this.readByte();
                         var currentState = this.read(stateReg);
                         var numEntries = this.readDWORD();
+                        console.log("[CFF] State=" + currentState + " entries=" + numEntries + " cur=" + cur);
                         for (var i = 0; i < numEntries; i++) {
                             var entryState = this.readDWORD();
                             var entryOffset = this.readJumpTargetDWORD();
                             if (currentState === entryState) {
-                                this.registers[0] = cur + entryOffset - 1;
+                                var target = cur + entryOffset - 1;
+                                console.log("[CFF]   MATCH! State " + currentState + " -> IP " + target);
+                                this.registers[0] = target;
                                 return;
                             }
                         }
+                        console.log("[CFF]   NO MATCH for state " + currentState);
                     }`;
                     cffHandler.value = acorn.parse(`(${cffTrampolineSrc})`, {ecmaVersion: "latest"}).body[0].expression;
                 }

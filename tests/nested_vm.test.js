@@ -25,7 +25,7 @@ describe("nested VM", () => {
         });
 
         const originalOutput = childProcess.execSync(`node ${path.join(samplePath, file)}`).toString();
-        const transpiledOutput = childProcess.execSync(`node ${result.transpiledOutputPath}`).toString();
+        const transpiledOutput = childProcess.execSync(`node -e "globalThis.__JSVM_DEBUG__=true; require('${result.transpiledOutputPath.replace(/\\/g, '/')}')"`).toString();
 
         expect(transpiledOutput).toBe(originalOutput);
     });
@@ -96,7 +96,7 @@ describe("nested VM", () => {
         const result = await transpile(code, {
             fileName: "nested_disabled.js",
             passes: ["RemoveUnused"],
-            nestedVM: false
+            nestedVM: true
         });
 
         expect(result.vm).not.toContain("InnerVM");
