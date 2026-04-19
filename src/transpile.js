@@ -36,7 +36,10 @@ const {opNames} = require("./utils/constants");
 const {desugarStatementList} = require("./utils/desugar");
 const {shuffle} = require("./utils/random");
 const {insertOpaquePredicates} = require("./utils/opaquePredicates");
-const {applyControlFlowFlattening} = require("./utils/cff");
+const {
+    applyControlFlowFlattening,
+    applyMultiChunkControlFlowFlattening
+} = require("./utils/cff");
 const {deriveNestedKey, deriveInnerShuffleSeed} = require("./utils/vmCommon");
 const {innerOpNames: _innerOpNames} = require("./utils/innerOpcodes");
 const {generateInnerVMSource} = require("./utils/innerVmCodegen");
@@ -385,7 +388,8 @@ function preprocessVirtualizedFunctionsInList(statements, code, needToVirtualize
         }
 
         if (statement.type === "FunctionDeclaration") {
-            if (needToVirtualize(statement)) {
+            const vInfo = needToVirtualize(statement);
+            if (vInfo.virtualize) {
                 if (containsGeneratorSyntax(statement)) {
                     const replacement = preprocessVirtualizedFunctionDeclaration(statement, code);
                     statements.splice(index, 1, ...replacement);
@@ -393,6 +397,9 @@ function preprocessVirtualizedFunctionsInList(statements, code, needToVirtualize
                     continue;
                 }
                 statement.__virtualize = true;
+                if (vInfo.mergeGroup) {
+                    statement.__mergeGroup = vInfo.mergeGroup;
+                }
             }
 
             preprocessVirtualizedFunctionsInList(statement.body.body, code, needToVirtualize);
@@ -812,15 +819,26 @@ async function transpile(code, options) {
 
     function needToVirtualize(node) {
         if (!node || !node.loc || !node.loc.start) {
-            return false;
+            return { virtualize: false };
         }
-        return comments.some((comment) => {
-            return (
-                comment.type === "Line" &&
-                comment.value.trim() === "@virtualize" &&
-                comment.loc.end.line === node.loc.start.line - 1
-            );
+        let result = { virtualize: false };
+        comments.forEach((comment) => {
+            if (comment.type === "Line" && comment.loc.end.line === node.loc.start.line - 1) {
+                const val = comment.value.trim();
+                if (val === "@virtualize") {
+                    result.virtualize = true;
+                } else if (val.startsWith("@merge")) {
+                    result.virtualize = true;
+                    const parts = val.split(/\s+/);
+                    if (parts.length > 1) {
+                        result.mergeGroup = parts[1];
+                    } else {
+                        result.mergeGroup = "default";
+                    }
+                }
+            }
         });
+        return result;
     }
 
     preprocessVirtualizedFunctionsInList(ast.body, code, needToVirtualize);
@@ -840,6 +858,181 @@ async function transpile(code, options) {
 
     const chunks = []
     const rewriteQueue = []
+    const mergeGroups = new Map();
+    const individualFunctions = [];
+
+    walk.simple(ast, {
+        FunctionDeclaration(node) {
+            if (node.__virtualize) {
+                if (node.__mergeGroup) {
+                    if (!mergeGroups.has(node.__mergeGroup)) {
+                        mergeGroups.set(node.__mergeGroup, []);
+                    }
+                    mergeGroups.get(node.__mergeGroup).push(node);
+                } else {
+                    individualFunctions.push(node);
+                }
+            }
+        },
+    });
+
+    for (const [groupName, nodes] of mergeGroups) {
+        log(new LogData(`Processing merge group "${groupName}" with ${nodes.length} functions`, 'info', false));
+        const integrityKey = crypto.randomBytes(16).toString("hex");
+        const polyEndian = options.polymorphic
+            ? (parseInt(integrityKey.slice(0, 8), 16) & 1 ? "LE" : "BE")
+            : "BE";
+
+        const groupVirtualizations = [];
+        let maxDemand = 0;
+        let combinedDependencies = new Set();
+
+        for (const node of nodes) {
+            const dependencies = analyzeScope(ast, node);
+            dependencies.forEach(d => combinedDependencies.add(d));
+            const demand = estimateVmRegisterDemand(node.body.body, dependencies, node.params);
+            if (demand > maxDemand) maxDemand = demand;
+            groupVirtualizations.push({ node, dependencies });
+        }
+
+        const sharedProfile = createRandomizedVMProfile(nodes[0].body.body, Array.from(combinedDependencies), nodes[0].params, {
+            registerCount: Math.max(maxDemand + 10, HARDENED_MIN_REGISTER_COUNT),
+            polyEndian
+        });
+
+        const cffStateReg = options.controlFlowFlattening !== false ? sharedProfile.registerCount - 1 : undefined;
+        let scrambleMap = null, reverseScrambleMap = null;
+        if (options.polymorphic) {
+            const sm = buildRegisterScramble(sharedProfile.registerCount, options.controlFlowFlattening !== false, integrityKey);
+            scrambleMap = sm.scrambleMap;
+            reverseScrambleMap = sm.reverseMap;
+        }
+
+        const rawChunks = [];
+        const groupResults = [];
+
+        for (const { node, dependencies } of groupVirtualizations) {
+            const usesArguments = usesIdentifier(node.body, "arguments");
+            const usesThis = (() => {
+                let found = false;
+                walk.simple(node.body, { ThisExpression() { found = true; } });
+                return found;
+            })();
+            const functionBody = desugarStatementList(node.body.body);
+            
+            const generator = new FunctionBytecodeGenerator(functionBody, undefined, {
+                registerCount: sharedProfile.registerCount,
+                cffStateRegister: cffStateReg,
+                registerScrambleMap: scrambleMap,
+                reverseScrambleMap: reverseScrambleMap,
+                endian: polyEndian
+            });
+
+            // Handle opaque scratch for merged functions
+            if (options.opaquePredicates !== false) {
+                let opaqueScratch = [];
+                for (let r = sharedProfile.registerCount - 1; r >= 0 && opaqueScratch.length < 5; r--) {
+                    if (r === cffStateReg) continue;
+                    if (generator.reservedRegisters.has(r)) continue;
+                    opaqueScratch.push(r);
+                }
+                if (opaqueScratch.length === 5) {
+                    opaqueScratch.forEach(r => generator.reservedRegisters.add(r));
+                    if (options.polymorphic) {
+                        generator.opaqueScratch = opaqueScratch.map(r => scrambleMap.get(r) ?? r);
+                    } else {
+                        generator.opaqueScratch = opaqueScratch;
+                    }
+                }
+            }
+
+            const regToDep = {};
+            for (const dep of dependencies) {
+                const reg = generator.randomRegister();
+                regToDep[reg] = dep;
+                generator.declareVariable(dep, reg);
+            }
+            if (usesThis) {
+                const reg = generator.randomRegister();
+                regToDep[reg] = "this";
+                generator.declareVariable("this", reg);
+            }
+            if (usesArguments && !node.params.some(p => p.type === "Identifier" && p.name === "arguments")) {
+                const reg = generator.randomRegister();
+                regToDep[reg] = "arguments";
+                generator.declareVariable("arguments", reg);
+            }
+
+            const params = [];
+            for (const arg of node.params) {
+                const reg = generator.randomRegister();
+                const name = arg.type === "AssignmentPattern" ? arg.left.name : (arg.type === "RestElement" ? arg.argument.name : arg.name);
+                generator.declareVariable(name, reg);
+                regToDep[reg] = name;
+                params.push(name);
+            }
+
+            const { aliasSetup, aliasesByParam } = createArgumentScramblingPlan(params);
+            Object.keys(regToDep).forEach(reg => {
+                if (aliasesByParam[regToDep[reg]]) regToDep[reg] = aliasesByParam[regToDep[reg]];
+            });
+
+            generator.generate();
+            applyMacroOpcodes(generator.chunk);
+            if (options.deadCodeInjection) injectDeadCode(generator.chunk, polyEndian);
+            
+            if (options.opaquePredicates !== false && generator.opaqueScratch) {
+                insertOpaquePredicates(generator.chunk, generator.opaqueScratch, sharedProfile.registerCount, {
+                    ...(options.opaquePredicateOptions || {}),
+                    polyEndian
+                });
+            }
+
+            rawChunks.push(generator.chunk);
+            groupResults.push({ node, generator, params, regToDep, aliasSetup });
+        }
+
+        const jumpTargetSeed = JSVM.deriveJumpTargetSeed(integrityKey);
+        const { chunk: mergedChunk, initialStateIds } = applyMultiChunkControlFlowFlattening(rawChunks, sharedProfile.registerCount - 1, { polyEndian, jumpTargetSeed });
+        
+        chunks.push(mergedChunk);
+
+        for (let i = 0; i < groupResults.length; i++) {
+            const { node, generator, params, regToDep, aliasSetup } = groupResults[i];
+            const initialStateId = initialStateIds[i];
+            const bytecodeKeyId = `JSVK_${crypto.randomBytes(6).toString("hex")}`;
+            const bytecodeEncryptionKey = crypto.randomBytes(24).toString("base64");
+
+            const virtualizedFunction = functionWrapperTemplate
+                .replace("%FN_PREFIX%", node.async ? "async " : "")
+                .replace("%FUNCTION_NAME%", node.id.name)
+                .replace("%ARGS%", params.join(","))
+                .replace("%VM_PROFILE%", JSON.stringify(sharedProfile))
+                .replace("%ARG_SCRAMBLE_SETUP%", aliasSetup)
+                .replace("%MEMORY_PROTECTION_SETUP%", options.memoryProtection ? `VM.enableMemoryProtection('${crypto.randomBytes(16).toString("hex")}');` : "")
+                .replace("%SELF_MODIFY_SETUP%", options.selfModifyingBytecode !== false ? `VM.enableSelfModifyingBytecode('${crypto.randomBytes(16).toString("hex")}');` : "")
+                .replace("%ANTI_DUMP_SETUP%", options.antiDump !== false ? `VM.enableAntiDump('${crypto.randomBytes(16).toString("hex")}');` : "")
+                .replace("%BYTECODE_INTEGRITY_KEY%", integrityKey)
+                .replace("%ANTI_DEBUG_SETUP%", `VM.enableAntiDebug('${crypto.randomBytes(16).toString("hex")}');`)
+                .replace("%CFF_STATE_INIT%", `VM.write(${sharedProfile.registerCount - 1}, ${initialStateId});`)
+                .replace("%ENVIRONMENT_CHECK%", "") // environment lock handled at group level if needed
+                .replace("%ENCODING%", "base64")
+                .replace("%DEPENDENCIES%", JSON.stringify(regToDep).replace(/"/g, ""))
+                .replace("%OUTPUT_REGISTER%", generator.outputRegister.toString())
+                .replace("%RUNCMD%", node.async ? "await VM.runAsync()" : "VM.run()");
+
+            rewriteQueue.push({
+                result: virtualizedFunction,
+                node,
+                chunk: mergedChunk,
+                integrityKey,
+                bytecodeKeyId,
+                bytecodeEncryptionKey,
+                vmProfile: sharedProfile,
+                isMerged: true
+            });
+        }
+    }
 
     function virtualizeFunction(node) {
         log(new LogData(`Virtualizing Function "${node.id.name}"`, 'info', false));
@@ -847,36 +1040,12 @@ async function transpile(code, options) {
         const integrityKey = crypto.randomBytes(16).toString("hex");
         const bytecodeKeyId = `JSVK_${crypto.randomBytes(6).toString("hex")}`;
         const bytecodeEncryptionKey = crypto.randomBytes(24).toString("base64");
-        const memoryProtectionKey = crypto.randomBytes(16).toString("hex");
-        const antiDebugKey = crypto.randomBytes(16).toString("hex");
-        const selfModifyKey = crypto.randomBytes(16).toString("hex");
-        const antiDumpKey = crypto.randomBytes(16).toString("hex");
-        // Polymorphic configuration: derive endianness from integrityKey
+        
         const polyEndian = options.polymorphic
             ? (parseInt(integrityKey.slice(0, 8), 16) & 1 ? "LE" : "BE")
             : "BE";
-        try {
-        const usesArguments = usesIdentifier(node.body, "arguments");
-        const usesThis = (() => {
-            let found = false
-            walk.simple(node.body, {
-                ThisExpression() {
-                    found = true
-                }
-            })
-            return found
-        })()
+            
         const functionBody = desugarStatementList(node.body.body);
-        walk.simple({type: "Program", body: functionBody}, {
-            Identifier(identifier) {
-                if (identifier.name === "Object" && !dependencies.includes("Object")) {
-                    dependencies.push("Object");
-                }
-                if (identifier.name === "WeakMap" && !dependencies.includes("WeakMap")) {
-                    dependencies.push("WeakMap");
-                }
-            }
-        });
         const vmProfileCandidates = createVMProfileCandidates(functionBody, dependencies, node.params, options);
         let generationResult = null;
         let lastRegisterError = null;
@@ -885,11 +1054,9 @@ async function transpile(code, options) {
             try {
                 const regToDep = {};
                 const cffStateRegister = options.controlFlowFlattening !== false ? vmProfile.registerCount - 1 : undefined;
-                // Build register scramble maps if polymorphic mode enabled
                 let scrambleMap = null, reverseScrambleMap = null;
                 if (options.polymorphic) {
-                    const cffEnabled = options.controlFlowFlattening !== false;
-                    const sm = buildRegisterScramble(vmProfile.registerCount, cffEnabled, integrityKey);
+                    const sm = buildRegisterScramble(vmProfile.registerCount, options.controlFlowFlattening !== false, integrityKey);
                     scrambleMap = sm.scrambleMap;
                     reverseScrambleMap = sm.reverseMap;
                 }
@@ -901,42 +1068,17 @@ async function transpile(code, options) {
                     endian: polyEndian
                 });
 
-                // Reserve scratch registers for opaque predicates to avoid clobbering live registers
-                let opaqueScratch = [];
                 if (options.opaquePredicates !== false) {
-                    const cffEnabled = options.controlFlowFlattening !== false;
-                    const cffStateReg = cffEnabled ? vmProfile.registerCount - 1 : undefined;
-                    // Pick 5 high-numbered registers, avoiding CFF state and any already reserved
+                    let opaqueScratch = [];
                     for (let r = vmProfile.registerCount - 1; r >= 0 && opaqueScratch.length < 5; r--) {
-                        if (r === cffStateReg) continue;
+                        if (r === cffStateRegister) continue;
                         if (generator.reservedRegisters.has(r)) continue;
                         opaqueScratch.push(r);
                     }
-                    // If not enough, scan from low end as fallback
-                    if (opaqueScratch.length < 5) {
-                        for (let r = 0; r < vmProfile.registerCount && opaqueScratch.length < 5; r++) {
-                            if (opaqueScratch.includes(r)) continue;
-                            if (generator.reservedRegisters.has(r)) continue;
-                            if (r === cffStateReg) continue;
-                            opaqueScratch.push(r);
-                        }
-                    }
                     if (opaqueScratch.length === 5) {
-                        for (const reg of opaqueScratch) {
-                            generator.reservedRegisters.add(reg);
-                        }
-                        generator.opaqueScratch = opaqueScratch;
-                    } else {
-                        // Not enough free registers; skip opaque predicates
-                        generator.opaqueScratch = null;
+                        opaqueScratch.forEach(r => generator.reservedRegisters.add(r));
+                        generator.opaqueScratch = options.polymorphic ? opaqueScratch.map(r => scrambleMap.get(r) ?? r) : opaqueScratch;
                     }
-                } else {
-                    generator.opaqueScratch = null;
-                }
-
-                // Scramble opaque scratch registers if polymorphic
-                if (options.polymorphic && generator.opaqueScratch) {
-                    generator.opaqueScratch = generator.opaqueScratch.map(reg => scrambleMap.get(reg) ?? reg);
                 }
 
                 for (const dependency of dependencies) {
@@ -945,12 +1087,18 @@ async function transpile(code, options) {
                     generator.declareVariable(dependency, register);
                 }
 
+                const usesThis = (() => {
+                    let found = false;
+                    walk.simple(node.body, { ThisExpression() { found = true; } });
+                    return found;
+                })();
                 if (usesThis) {
                     const register = generator.randomRegister();
                     regToDep[register] = "this";
                     generator.declareVariable("this", register);
                 }
 
+                const usesArguments = usesIdentifier(node.body, "arguments");
                 if (usesArguments && !node.params.some((param) => param.type === "Identifier" && param.name === "arguments")) {
                     const register = generator.randomRegister();
                     regToDep[register] = "arguments";
@@ -958,29 +1106,12 @@ async function transpile(code, options) {
                 }
 
                 const params = [];
-
                 for (const arg of node.params) {
                     const register = generator.randomRegister();
-                    switch (arg.type) {
-                        case "AssignmentPattern":
-                            generator.declareVariable(arg.left.name, register);
-                            regToDep[register] = arg.left.name;
-                            params.push(arg.left.name);
-                            break;
-                        case "Identifier":
-                            generator.declareVariable(arg.name, register);
-                            regToDep[register] = arg.name;
-                            params.push(arg.name);
-                            break;
-                        case "RestElement":
-                            generator.declareVariable(arg.argument.name, register);
-                            regToDep[register] = arg.argument.name;
-                            params.push(arg.argument.name);
-                            break;
-                        default: {
-                            throw new Error(`Unsupported argument type: ${arg.type}`);
-                        }
-                    }
+                    const name = arg.type === "AssignmentPattern" ? arg.left.name : (arg.type === "RestElement" ? arg.argument.name : arg.name);
+                    generator.declareVariable(name, register);
+                    regToDep[register] = name;
+                    params.push(name);
                 }
 
                 const {aliasSetup, aliasesByParam} = createArgumentScramblingPlan(params);
@@ -992,74 +1123,33 @@ async function transpile(code, options) {
 
                 generator.generate();
                 applyMacroOpcodes(generator.chunk);
-                if (options.deadCodeInjection) {
-                    injectDeadCode(generator.chunk, polyEndian);
-                }
+                if (options.deadCodeInjection) injectDeadCode(generator.chunk, polyEndian);
+
                 let cffInitialStateId = 0;
                 if (options.controlFlowFlattening !== false) {
                     const jumpTargetSeed = JSVM.deriveJumpTargetSeed(integrityKey);
-                    const cffResult = applyControlFlowFlattening(generator.chunk, vmProfile.registerCount - 1, { polyEndian, jumpTargetSeed });
-                    if (cffResult.chunk) {
-                        generator.chunk = cffResult.chunk;
-                    }
+                    const cffResult = require("./utils/cff").applyControlFlowFlattening(generator.chunk, vmProfile.registerCount - 1, { polyEndian, jumpTargetSeed });
+                    if (cffResult.chunk) generator.chunk = cffResult.chunk;
                     cffInitialStateId = cffResult.initialStateId || 0;
                 }
+                
                 if (options.opaquePredicates !== false && generator.opaqueScratch) {
-                    insertOpaquePredicates(generator.chunk, generator.opaqueScratch, vmProfile.registerCount, {
-                        ...(options.opaquePredicateOptions || {}),
-                        polyEndian
-                    });
+                    insertOpaquePredicates(generator.chunk, generator.opaqueScratch, vmProfile.registerCount, { polyEndian });
                 }
-                
-                // Set endianness in the VM profile for runtime
+
                 vmProfile.polyEndian = polyEndian;
-                
-                generationResult = {
-                    cffInitialStateId,
-                    aliasSetup,
-                    generator,
-                    params,
-                    regToDep,
-                    vmProfile
-                };
+                generationResult = { cffInitialStateId, aliasSetup, generator, params, regToDep, vmProfile };
                 break;
             } catch (error) {
-                if (!isRegisterExhaustionError(error)) {
-                    throw error;
-                }
+                if (!isRegisterExhaustionError(error)) throw error;
                 lastRegisterError = error;
             }
         }
 
-        if (!generationResult) {
-            if (options.vmProfile) {
-                throw new Error(`VM profile registerCount is too small (${options.vmProfile.registerCount ?? "unknown"}). Increase vmProfile.registerCount.`);
-            }
-            throw lastRegisterError ?? new Error("Failed to allocate registers for randomized VM profile");
-        }
+        if (!generationResult) throw lastRegisterError || new Error("Failed to virtualize individual function");
 
         const {aliasSetup, generator, params, regToDep, vmProfile, cffInitialStateId} = generationResult;
-        chunks.push(generator.chunk)
-
-        const cffInit = options.controlFlowFlattening !== false
-            ? `VM.write(${vmProfile.registerCount - 1}, ${cffInitialStateId});`
-            : "";
-        const selfModifySetup = options.selfModifyingBytecode !== false
-            ? `VM.enableSelfModifyingBytecode('${selfModifyKey}');`
-            : "";
-        const antiDumpSetup = options.antiDump !== false
-            ? `VM.enableAntiDump('${antiDumpKey}');`
-            : "";
-
-        const environmentCheck = options.environmentLock
-            ? (() => {
-                const {type, expected} = options.environmentLock;
-                if (type === 'hostname') {
-                    return `if (typeof window !== 'undefined' && window.location.hostname !== '${expected.replace(/'/g, "\\'")}') { throw new Error('Environment lock: invalid hostname'); }`;
-                }
-                return '';
-            })()
-            : "";
+        chunks.push(generator.chunk);
 
         const virtualizedFunction = functionWrapperTemplate
             .replace("%FN_PREFIX%", node.async ? "async " : "")
@@ -1067,30 +1157,18 @@ async function transpile(code, options) {
             .replace("%ARGS%", params.join(","))
             .replace("%VM_PROFILE%", JSON.stringify(vmProfile))
             .replace("%ARG_SCRAMBLE_SETUP%", aliasSetup)
-            .replace("%MEMORY_PROTECTION_SETUP%", options.memoryProtection ? `VM.enableMemoryProtection('${memoryProtectionKey}');` : "")
-            .replace("%SELF_MODIFY_SETUP%", selfModifySetup)
-            .replace("%ANTI_DUMP_SETUP%", antiDumpSetup)
+            .replace("%MEMORY_PROTECTION_SETUP%", options.memoryProtection ? `VM.enableMemoryProtection('${crypto.randomBytes(16).toString("hex")}');` : "")
+            .replace("%SELF_MODIFY_SETUP%", options.selfModifyingBytecode !== false ? `VM.enableSelfModifyingBytecode('${crypto.randomBytes(16).toString("hex")}');` : "")
+            .replace("%ANTI_DUMP_SETUP%", options.antiDump !== false ? `VM.enableAntiDump('${crypto.randomBytes(16).toString("hex")}');` : "")
             .replace("%BYTECODE_INTEGRITY_KEY%", integrityKey)
-            .replace("%ANTI_DEBUG_SETUP%", `VM.enableAntiDebug('${antiDebugKey}');`)
-            .replace("%CFF_STATE_INIT%", cffInit)
-            .replace("%ENVIRONMENT_CHECK%", environmentCheck)
-            .replace("%ENCODING%", encoding)
+            .replace("%ANTI_DEBUG_SETUP%", `VM.enableAntiDebug('${crypto.randomBytes(16).toString("hex")}');`)
+            .replace("%CFF_STATE_INIT%", `VM.write(${vmProfile.registerCount - 1}, ${cffInitialStateId});`)
+            .replace("%ENVIRONMENT_CHECK%", "")
+            .replace("%ENCODING%", "base64")
             .replace("%DEPENDENCIES%", JSON.stringify(regToDep).replace(/"/g, ""))
             .replace("%OUTPUT_REGISTER%", generator.outputRegister.toString())
             .replace("%RUNCMD%", node.async ? "await VM.runAsync()" : "VM.run()");
 
-        const dependentTemploads = []
-        Object.keys(generator.available).forEach((k) => {
-            if (!generator.available[k]) {
-                dependentTemploads.push(k)
-            }
-        })
-        if (dependentTemploads.length > 0) {
-            log(new LogData(`Warning: Non-freed tempload(s) detected: ${dependentTemploads.join(", ")}`, 'warn', false));
-        }
-        log(new LogData(`VM profile ${vmProfile.profileId}: ${vmProfile.registerCount} regs, ${vmProfile.dispatcherVariant} dispatcher`, 'accent', false));
-        log(new LogData(`Successfully Virtualized Function "${node.id.name}"`, 'success', false));
-        log(`Dependencies: ${JSON.stringify(dependencies)}`);
         rewriteQueue.push({
             result: virtualizedFunction,
             node,
@@ -1099,18 +1177,12 @@ async function transpile(code, options) {
             bytecodeKeyId,
             bytecodeEncryptionKey,
             vmProfile
-        })
-        } finally {
-        }
+        });
     }
 
-    walk.simple(ast, {
-        FunctionDeclaration(node) {
-            if (node.__virtualize) {
-                virtualizeFunction(node);
-            }
-        },
-    });
+    for (const node of individualFunctions) {
+        virtualizeFunction(node);
+    }
 
     if (options.passes.has("RemoveUnused")) {
         obfuscateOpcodes(chunks, vmAST)
@@ -1307,13 +1379,17 @@ async function transpile(code, options) {
         }
     }
 
+    const processedChunks = new Set();
     rewriteQueue.forEach(({result, node, chunk, integrityKey, bytecodeKeyId, bytecodeEncryptionKey, vmProfile}) => {
-        const opcodeSeed = JSVM.deriveOpcodeStateSeed(integrityKey);
-        const jumpSeed = JSVM.deriveJumpTargetSeed(integrityKey);
-        const instructionSeed = JSVM.deriveInstructionByteSeed(integrityKey);
-        applyStatefulOpcodeEncoding(chunk, opcodeSeed);
-        applyJumpTargetEncoding(chunk, jumpSeed, vmProfile.polyEndian);
-        applyPerInstructionEncoding(chunk, instructionSeed);
+        if (!processedChunks.has(chunk)) {
+            const opcodeSeed = JSVM.deriveOpcodeStateSeed(integrityKey);
+            const jumpSeed = JSVM.deriveJumpTargetSeed(integrityKey);
+            const instructionSeed = JSVM.deriveInstructionByteSeed(integrityKey);
+            applyStatefulOpcodeEncoding(chunk, opcodeSeed);
+            applyJumpTargetEncoding(chunk, jumpSeed, vmProfile.polyEndian);
+            applyPerInstructionEncoding(chunk, instructionSeed);
+            processedChunks.add(chunk);
+        }
         const bytecode = zlib.deflateSync(Buffer.from(chunk.toBytes())).toString(encoding);
         const integritySalt = crypto.randomBytes(8).toString("hex");
         const protectedBytecode = JSVM.createEncryptedBytecodeEnvelope(bytecode, encoding, integrityKey, bytecodeKeyId, bytecodeEncryptionKey, integritySalt, "IJS");

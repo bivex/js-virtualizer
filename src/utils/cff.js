@@ -85,7 +85,6 @@ function identifyBlocks(chunk) {
         byteOffsets.push(bytePos);
         bytePos += opcodes[i].toBytes().length;
     }
-    const totalBytes = bytePos;
 
     // Map byte offset → opcode index
     const byteToIndex = new Map();
@@ -99,8 +98,6 @@ function identifyBlocks(chunk) {
 
         // Mark jump targets as leaders
         if (opcode.name === "VFUNC_CALL" || opcode.name === "VFUNC_SETUP_CALLBACK") {
-            // VFUNC offset is relative to cur (IP after opcode byte), pointing forward
-            // cur = byteOffsets[i] + 1 (the byte after the opcode byte)
             const cur = byteOffsets[i] + 1;
             for (const pos of offsetPositions) {
                 const offset = readOffsetFromData(opcode.data, pos);
@@ -111,9 +108,6 @@ function identifyBlocks(chunk) {
                 }
             }
         } else if (offsetPositions.length > 0) {
-            // Jump offsets: cur = byteOffsets[i] + 1
-            // target = cur + offset - 1 (for JUMP_*, MACRO_TEST_JUMP_*)
-            // TRY_CATCH_FINALLY: catch/finally offsets also use cur + offset - 1
             const cur = byteOffsets[i] + 1;
             for (const pos of offsetPositions) {
                 const offset = readOffsetFromData(opcode.data, pos);
@@ -188,27 +182,6 @@ function applyControlFlowFlattening(chunk, cffStateReg, options = {}) {
         bpos += opcodes[i].toBytes().length;
     }
 
-    // Verify all jump targets resolve to block boundaries
-    const blockByteOffsets = new Set(blocks.map(b => b.byteOffset));
-    for (let i = 0; i < opcodes.length; i++) {
-        const opcode = opcodes[i];
-        const offsetPositions = getOffsetPositionsInOpcode(opcode);
-        if (offsetPositions.length > 0) {
-            const cur = originalByteOffsets.get(i) + 1;
-            for (const pos of offsetPositions) {
-                const offset = readOffsetFromData(opcode.data, pos);
-                const targetByte = cur + offset - 1;
-                if (!blockByteOffsets.has(targetByte)) return { initialStateId: 0 };
-            }
-        }
-    }
-
-    // Build a reverse map: original byte offset → block index
-    const byteOffsetToBlock = new Map();
-    for (const block of blocks) {
-        byteOffsetToBlock.set(block.byteOffset, block.index);
-    }
-
     // Assign random state IDs
     const stateIds = new Map();
     const usedStates = new Set();
@@ -224,7 +197,6 @@ function applyControlFlowFlattening(chunk, cffStateReg, options = {}) {
 
     // Determine successor blocks for each block
     function findBlockAtByteOffset(byteOffset) {
-        // Find the block whose byteOffset matches
         for (const block of blocks) {
             if (block.byteOffset === byteOffset) return block;
         }
@@ -251,19 +223,16 @@ function applyControlFlowFlattening(chunk, cffStateReg, options = {}) {
         const lastOpcode = newOpcodes[newOpcodes.length - 1];
 
         if (lastOpcode.name === "END" || lastOpcode.name === "THROW" || lastOpcode.name === "THROW_ARGUMENT") {
-            // Terminal — keep as-is
             rewrittenBlocks.push({ ...block, opcodes: newOpcodes, stateId: stateIds.get(block.index) });
             continue;
         }
 
         if (lastOpcode.name === "JUMP_UNCONDITIONAL") {
-            // Replace: SET cffReg, targetState; JUMP to dispatch
             const targets = getJumpTargetBlock(lastOpcode, block.endOpcodeIndex - 1);
-            newOpcodes.pop(); // remove the original jump
+            newOpcodes.pop();
             if (targets.length > 0) {
                 newOpcodes.push(new Opcode("SET", cffStateReg, targets[0].stateId));
             } else {
-                // Fallback: jump to next block
                 const nextBlockIdx = block.index + 1;
                 if (nextBlockIdx < blocks.length) {
                     newOpcodes.push(new Opcode("SET", cffStateReg, stateIds.get(nextBlockIdx)));
@@ -273,48 +242,32 @@ function applyControlFlowFlattening(chunk, cffStateReg, options = {}) {
                     continue;
                 }
             }
-            // Jump to dispatch placeholder — will be patched later
             newOpcodes.push(new Opcode("JUMP_UNCONDITIONAL", encodeDWORD(0, polyEndian)));
             rewrittenBlocks.push({ ...block, opcodes: newOpcodes, stateId: stateIds.get(block.index), needsDispatchJump: true });
             continue;
         }
 
         if (lastOpcode.name === "JUMP_EQ" || lastOpcode.name === "JUMP_NOT_EQ") {
-            // Conditional jump: keep condition, rewrite targets
             const targets = getJumpTargetBlock(lastOpcode, block.endOpcodeIndex - 1);
             const takenState = targets.length > 0 ? targets[0].stateId : stateIds.get(block.index + 1);
-
-            // Determine not-taken (fall-through) block
             const nextBlockIdx = block.index + 1;
             const notTakenState = nextBlockIdx < blocks.length ? stateIds.get(nextBlockIdx) : 0;
-
-            // Keep the condition register
             const condReg = lastOpcode.data[0];
 
-            // Rewrite: keep the conditional jump but redirect to taken-stub
-            // Then fall-through to not-taken stub
-            newOpcodes.pop(); // remove original conditional jump
+            newOpcodes.pop();
 
-            // Taken stub: SET cffReg, takenState; JUMP dispatch
             const takenStub = [
                 new Opcode("SET", cffStateReg, takenState),
-                new Opcode("JUMP_UNCONDITIONAL", encodeDWORD(0, polyEndian)), // patched later
+                new Opcode("JUMP_UNCONDITIONAL", encodeDWORD(0, polyEndian)),
             ];
             const takenStubBytes = takenStub.reduce((s, op) => s + op.toBytes().length, 0);
 
-            // Not-taken stub: SET cffReg, notTakenState; JUMP dispatch
             const notTakenStub = [
                 new Opcode("SET", cffStateReg, notTakenState),
-                new Opcode("JUMP_UNCONDITIONAL", encodeDWORD(0, polyEndian)), // patched later
+                new Opcode("JUMP_UNCONDITIONAL", encodeDWORD(0, polyEndian)),
             ];
 
-            // Conditional jump over not-taken stub to taken stub
-            // Layout: [JUMP_EQ/NOT_EQ condReg, offset_to_taken_stub] [not-taken stub] [taken stub]
-            // offset needs to skip over not-taken stub
             const notTakenStubBytes = notTakenStub.reduce((s, op) => s + op.toBytes().length, 0);
-            // JUMP_EQ: cur = IP after opcode byte; reads reg(1) + offset(4) = 5 bytes
-            // target = cur + offset - 1; we want target = cur + 5 + notTakenStubBytes
-            // so offset = notTakenStubBytes + 6
             const condJumpOffset = notTakenStubBytes + 6;
 
             newOpcodes.push(new Opcode(lastOpcode.name, condReg, encodeDWORD(condJumpOffset, polyEndian)));
@@ -326,7 +279,6 @@ function applyControlFlowFlattening(chunk, cffStateReg, options = {}) {
         }
 
         if (lastOpcode.name === "MACRO_TEST_JUMP_EQ" || lastOpcode.name === "MACRO_TEST_JUMP_NOT_EQ") {
-            // Split back: TEST + conditional jump pattern
             const targets = getJumpTargetBlock(lastOpcode, block.endOpcodeIndex - 1);
             const takenState = targets.length > 0 ? targets[0].stateId : stateIds.get(block.index + 1);
             const nextBlockIdx = block.index + 1;
@@ -336,22 +288,19 @@ function applyControlFlowFlattening(chunk, cffStateReg, options = {}) {
             const testSrc = lastOpcode.data[1];
             const jumpReg = lastOpcode.data[2];
 
-            newOpcodes.pop(); // remove MACRO_TEST_JUMP
+            newOpcodes.pop();
 
-            // Not-taken stub
             const notTakenStub = [
                 new Opcode("SET", cffStateReg, notTakenState),
                 new Opcode("JUMP_UNCONDITIONAL", encodeDWORD(0, polyEndian)),
             ];
             const notTakenStubBytes = notTakenStub.reduce((s, op) => s + op.toBytes().length, 0);
 
-            // Taken stub
             const takenStub = [
                 new Opcode("SET", cffStateReg, takenState),
                 new Opcode("JUMP_UNCONDITIONAL", encodeDWORD(0, polyEndian)),
             ];
 
-            // TEST + conditional jump over not-taken to taken
             const condJumpOffset = notTakenStubBytes + 6;
             const condJumpName = lastOpcode.name === "MACRO_TEST_JUMP_EQ" ? "JUMP_EQ" : "JUMP_NOT_EQ";
 
@@ -364,7 +313,6 @@ function applyControlFlowFlattening(chunk, cffStateReg, options = {}) {
             continue;
         }
 
-        // Fall-through block: append SET + JUMP to dispatch
         const nextBlockIdx = block.index + 1;
         if (nextBlockIdx < blocks.length) {
             newOpcodes.push(new Opcode("SET", cffStateReg, stateIds.get(nextBlockIdx)));
@@ -375,166 +323,283 @@ function applyControlFlowFlattening(chunk, cffStateReg, options = {}) {
         }
     }
 
-    // Shuffle blocks (but keep the dispatch table first)
-    // Create indices and shuffle
     const blockIndices = rewrittenBlocks.map((_, i) => i);
     shuffleArray(blockIndices);
 
-    // Assemble the new chunk
-    // Layout: [SET cffReg, initialState] [JUMP_UNCONDITIONAL to dispatch] [CFF_DISPATCH ...] [block0] [block1] ... [blockN]
-
-    // First, compute sizes of each block to know the dispatch offset
     const blockSizes = rewrittenBlocks.map(b => b.opcodes.reduce((s, op) => s + op.toBytes().length, 0));
-
-    // Header: SET(2 bytes) + JUMP_UNCONDITIONAL(5 bytes) = 7 bytes
-    const headerSize = 7;
-
-    // CFF_DISPATCH size: 1(opcode) + 1(stateReg) + 4(numEntries) + numEntries * 8 = 6 + numEntries*8
     const numEntries = rewrittenBlocks.length;
-    const dispatchSize = 1 + 1 + 4 + numEntries * 8;
 
-    // Dispatch starts after header
-    const dispatchByteOffset = headerSize;
+    const realHeaderSize = 3 + 5; // SET(3) + JUMP(5)
+    const realDispatchByteOffset = realHeaderSize;
 
-    // Blocks start after dispatch
-    const blocksStartOffset = headerSize + dispatchSize;
+    const headerOpcodes = [
+        new Opcode("SET", cffStateReg, initialStateId),
+        new Opcode("JUMP_UNCONDITIONAL", encodeDWORD(realDispatchByteOffset - 3, polyEndian)),
+    ];
 
-    // Compute each shuffled block's byte offset
-    const shuffledBlockOffsets = new Map();
+    const dispatchData = Buffer.alloc(1 + 4 + numEntries * 8);
+    dispatchData[0] = cffStateReg;
+    const writeU32 = (polyEndian === "LE") ? "writeUInt32LE" : "writeUInt32BE";
+    const writeI32 = (polyEndian === "LE") ? "writeInt32LE" : "writeInt32BE";
+    dispatchData[writeU32](numEntries, 1);
+
+    const blocksStartOffset = realHeaderSize + (1 + 1 + 4 + numEntries * 8);
     let currentOffset = blocksStartOffset;
+    const shuffledBlockOffsets = new Map();
     for (const blockIdx of blockIndices) {
         shuffledBlockOffsets.set(blockIdx, currentOffset);
         currentOffset += blockSizes[blockIdx];
     }
-
-    // Build CFF_DISPATCH opcode data
-    const dispatchData = Buffer.alloc(1 + 4 + numEntries * 8);
-    dispatchData[0] = cffStateReg;
-
-    const writeU32 = (polyEndian === "LE") ? "writeUInt32LE" : "writeUInt32BE";
-    const writeI32 = (polyEndian === "LE") ? "writeInt32LE" : "writeInt32BE";
-
-    dispatchData[writeU32](numEntries, 1);
-
-    for (let i = 0; i < numEntries; i++) {
-        const blockIdx = blockIndices[i];
-        const stateId = stateIds.get(blockIdx);
-        const blockOffset = shuffledBlockOffsets.get(blockIdx);
-        const offset = blockOffset;
-        const entryBase = 5 + i * 8;
-        const entryOffsetPosition = entryBase + 4;
-        dispatchData[writeU32](stateId, entryBase);
-        let offsetBytes = Buffer.alloc(4);
-        offsetBytes[writeI32](offset, 0);
-        if (jumpTargetSeed) {
-            offsetBytes = Buffer.from(transformJumpTargetBytes([...offsetBytes], entryOffsetPosition, jumpTargetSeed));
-        }
-        dispatchData.set(offsetBytes, entryOffsetPosition);
+for (let i = 0; i < numEntries; i++) {
+    const blockIdx = blockIndices[i];
+    const stateId = stateIds.get(blockIdx);
+    const blockOffset = shuffledBlockOffsets.get(blockIdx);
+    const entryOffset = blockOffset - realDispatchByteOffset;
+    const entryBase = 5 + i * 8;
+    dispatchData[writeU32](stateId, entryBase);
+    let offsetBytes = Buffer.alloc(4);
+    offsetBytes[writeI32](entryOffset, 0);
+    dispatchData.set(offsetBytes, entryBase + 4);
     }
 
-    // Now patch all "JUMP_UNCONDITIONAL dispatch" instructions to point to the dispatch opcode
-    for (const block of rewrittenBlocks) {
-        if (!block.needsDispatchJump) continue;
-        for (const opcode of block.opcodes) {
-            if (opcode.name === "JUMP_UNCONDITIONAL" && opcode.data.length === 4) {
-                // This is a dispatch jump — patch offset to point to CFF_DISPATCH
-                // We need to know this opcode's byte position in the new layout
-                // For now, mark it — we'll do a second pass
-                opcode._isCffDispatchJump = true;
-            }
-        }
-    }
-
-    // Second pass: compute exact byte positions of each opcode and patch dispatch jumps
-    // Build the full opcode array in shuffled order
-    const headerOpcodes = [
-        new Opcode("SET", cffStateReg, initialStateId),
-        new Opcode("JUMP_UNCONDITIONAL", encodeDWORD(0, polyEndian)), // will be patched
-    ];
     const dispatchOpcode = new Opcode("CFF_DISPATCH", dispatchData);
-
-    // The header jump target: JUMP_UNCONDITIONAL needs to reach the CFF_DISPATCH
-    // Header: SET(2) + JUMP(5) = 7 bytes. Dispatch is at offset 7.
-    // JUMP_UNCONDITIONAL cur = offset after its opcode byte = 1 (SET is 2 bytes, JUMP opcode is at byte 2)
-    // Actually, let's compute:
-    // SET cffReg, stateId: opcode(1) + dest(1) + src(1) = wait, SET format is [dest, src]
-    // SET = 1(opcode) + 1(dest) + 1(src) = 3 bytes... let me check
-
-    // Looking at assembler: Opcode("SET", cffStateReg, initialStateId)
-    // cffStateReg is a number → Buffer.from([number]) = 1 byte
-    // initialStateId is a number → Buffer.from([number]) = 1 byte
-    // So SET data = 2 bytes, total = 1(opcode) + 2(data) = 3 bytes
-
-    // JUMP_UNCONDITIONAL = 1(opcode) + 4(data) = 5 bytes
-
-    // Header = 3 + 5 = 8 bytes
-    const realHeaderSize = 3 + 5; // SET(3) + JUMP(5)
-    const realDispatchByteOffset = realHeaderSize;
-
-    // Patch header jump to dispatch
-    // JUMP_UNCONDITIONAL: cur = IP after opcode byte = realHeaderSize - 5 + 1 = realHeaderSize - 4
-    // Wait: SET is at byte 0, size 3. JUMP is at byte 3, size 5.
-    // readOpcode reads byte 3 (JUMP opcode), IP = 4.
-    // Handler: cur = this.read(IP) = 4.
-    // readJumpTargetDWORD reads 4 bytes (IP 4-7), IP = 8.
-    // Target = cur + offset - 1 = 4 + offset - 1 = 3 + offset.
-    // We want target = realDispatchByteOffset (the CFF_DISPATCH opcode position).
-    // So offset = realDispatchByteOffset - 3.
-    headerOpcodes[1].modifyArgs(encodeDWORD(realDispatchByteOffset - 3, polyEndian));
-
-    // Now assemble all blocks in shuffled order and compute their actual byte positions
     const allOpcodes = [...headerOpcodes, dispatchOpcode];
-
-    // Track byte positions of all opcodes for patching dispatch jumps
-    const opcodePositions = [];
-    let pos = 0;
-    for (const op of allOpcodes) {
-        opcodePositions.push(pos);
-        pos += op.toBytes().length;
-    }
-
-    // Add shuffled blocks and track positions
-    for (const blockIdx of blockIndices) {
-        const block = rewrittenBlocks[blockIdx];
-        for (const op of block.opcodes) {
-            opcodePositions.push(pos);
-            pos += op.toBytes().length;
-        }
-    }
-
-    // Now we need to build the full opcode array again with correct positions
-    // Rebuild to patch dispatch jumps
-    allOpcodes.length = 0;
-    allOpcodes.push(...headerOpcodes, dispatchOpcode);
-
     let rebuildPos = realHeaderSize + dispatchOpcode.toBytes().length;
 
     for (const blockIdx of blockIndices) {
         const block = rewrittenBlocks[blockIdx];
         for (const op of block.opcodes) {
-            if (op._isCffDispatchJump) {
-                // Patch this JUMP_UNCONDITIONAL to point to the CFF_DISPATCH opcode
-                // cur = rebuildPos + 1 (IP after this opcode's byte)
-                // Actually: this opcode is at position rebuildPos
-                // readOpcode reads byte at rebuildPos, IP = rebuildPos + 1
-                // Handler: cur = this.read(IP) = rebuildPos + 1
-                // readJumpTargetDWORD reads 4 bytes, IP = rebuildPos + 1 + 4 = rebuildPos + 5
-                // Target = cur + offset - 1 = rebuildPos + 1 + offset - 1 = rebuildPos + offset
-                // We want target = realDispatchByteOffset (position of CFF_DISPATCH)
-                // So offset = realDispatchByteOffset - rebuildPos
+            if (op.name === "JUMP_UNCONDITIONAL" && op.data.length === 4 && op.data.readInt32BE(0) === 0) {
                 const offset = realDispatchByteOffset - rebuildPos;
                 op.modifyArgs(encodeDWORD(offset, polyEndian));
-                delete op._isCffDispatchJump;
             }
             allOpcodes.push(op);
             rebuildPos += op.toBytes().length;
         }
     }
 
-    // Build the new chunk
     const newChunk = new VMChunk(chunk.metadata);
     newChunk.code = allOpcodes;
     return { chunk: newChunk, initialStateId };
 }
 
-module.exports = { applyControlFlowFlattening };
+function applyMultiChunkControlFlowFlattening(chunks, cffStateReg, options = {}) {
+    const polyEndian = options.polyEndian || "BE";
+    const jumpTargetSeed = options.jumpTargetSeed;
+
+    const allRewrittenBlocks = [];
+    const chunkInitialStateIds = [];
+    const usedStates = new Set();
+
+    for (let chunkIdx = 0; chunkIdx < chunks.length; chunkIdx++) {
+        const chunk = chunks[chunkIdx];
+        const opcodes = chunk.code;
+        console.log(`DEBUG: Processing chunk ${chunkIdx}, opcodes: ${opcodes.length}`);
+
+        const hasUnsafe = opcodes.some(op => UNSAFE_OPCODES.has(op.name));
+        if (hasUnsafe) throw new Error(`Chunk ${chunkIdx} contains unsafe opcodes for CFF`);
+
+        const blocks = identifyBlocks(chunk);
+        // Фильтруем мусорные блоки (пустые или состоящие только из NOP)
+        const validBlocks = blocks.filter(b => b.opcodes.length > 0 && !b.opcodes.every(o => o.name === 'NOP'));
+        console.log(`DEBUG: Chunk ${chunkIdx} identified ${blocks.length} blocks, kept ${validBlocks.length} valid blocks`);
+
+        const originalByteOffsets = new Map();
+        let bpos = 0;
+        for (let i = 0; i < opcodes.length; i++) {
+            originalByteOffsets.set(i, bpos);
+            bpos += opcodes[i].toBytes().length;
+        }
+        const totalChunkSize = bpos;
+        console.log(`DEBUG: Chunk ${chunkIdx} total size: ${totalChunkSize}`);
+
+        const stateIds = new Map();
+        for (let i = 0; i < validBlocks.length; i++) {
+            let stateId;
+            do {
+                stateId = crypto.randomInt(1, 0x7FFFFFFF);
+            } while (usedStates.has(stateId));
+            usedStates.add(stateId);
+            stateIds.set(validBlocks[i].index, stateId);
+        }
+        chunkInitialStateIds.push(stateIds.get(validBlocks[0].index));
+        console.log(`DEBUG: Chunk ${chunkIdx} initialStateId: ${stateIds.get(validBlocks[0].index)}`);
+
+        function findBlockAtByteOffset(byteOffset) {
+            const originalBlock = blocks.find(b => b.byteOffset === byteOffset);
+            if (!originalBlock) {
+                if (byteOffset === totalChunkSize) {
+                    console.log(`DEBUG:   Target byte ${byteOffset} is at end of chunk`);
+                }
+                return null;
+            }
+            return validBlocks.find(vb => vb.index >= originalBlock.index) || null;
+        }
+
+        function getJumpTargetBlock(opcode, opcodeIndex) {
+            const cur = originalByteOffsets.get(opcodeIndex) + 1;
+            const offsetPositions = getOffsetPositionsInOpcode(opcode);
+            const targets = [];
+            for (const pos of offsetPositions) {
+                const offset = readOffsetFromData(opcode.data, pos);
+                const targetByte = cur + offset - 1;
+                const block = findBlockAtByteOffset(targetByte);
+                if (block) {
+                    targets.push({ pos, blockId: block.index, stateId: stateIds.get(block.index) });
+                    console.log(`DEBUG:   Opcode ${opcode.name} at idx ${opcodeIndex} targets byte ${targetByte} -> block ${block.index} [state ${stateIds.get(block.index)}]`);
+                } else {
+                    console.log(`DEBUG:   Opcode ${opcode.name} at idx ${opcodeIndex} targets byte ${targetByte} -> NO BLOCK FOUND`);
+                }
+            }
+            return targets;
+        }
+
+        for (const block of validBlocks) {
+            console.log(`DEBUG: Chunk ${chunkIdx} Block ${block.index} [state ${stateIds.get(block.index)}]: ${block.opcodes.map(o => o.name).join(', ')}`);
+            const newOpcodes = [...block.opcodes];
+            const lastOpcode = newOpcodes[newOpcodes.length - 1];
+            let needsDispatchJump = false;
+
+            if (lastOpcode.name === "END" || lastOpcode.name === "THROW" || lastOpcode.name === "THROW_ARGUMENT") {
+                // Terminal - keep as is
+            } else if (lastOpcode.name === "JUMP_UNCONDITIONAL") {
+                const targets = getJumpTargetBlock(lastOpcode, block.endOpcodeIndex - 1);
+                newOpcodes.pop();
+                const targetState = targets.length > 0 ? targets[0].stateId : null;
+                if (targetState) {
+                    newOpcodes.push(new Opcode("SET", cffStateReg, targetState));
+                    newOpcodes.push(new Opcode("JUMP_UNCONDITIONAL", encodeDWORD(0, polyEndian)));
+                    needsDispatchJump = true;
+                } else {
+                    newOpcodes.push(new Opcode("END"));
+                }
+            } else if (lastOpcode.name === "JUMP_EQ" || lastOpcode.name === "JUMP_NOT_EQ") {
+                const targets = getJumpTargetBlock(lastOpcode, block.endOpcodeIndex - 1);
+                const takenState = targets.length > 0 ? targets[0].stateId : null;
+                const nextBlock = validBlocks[validBlocks.indexOf(block) + 1];
+                const notTakenState = nextBlock ? stateIds.get(nextBlock.index) : null;
+                const condReg = lastOpcode.data[0];
+
+                newOpcodes.pop();
+                const takenStub = takenState ? [
+                    new Opcode("SET", cffStateReg, takenState),
+                    new Opcode("JUMP_UNCONDITIONAL", encodeDWORD(0, polyEndian)),
+                ] : [new Opcode("END")];
+                const notTakenStub = notTakenState ? [
+                    new Opcode("SET", cffStateReg, notTakenState),
+                    new Opcode("JUMP_UNCONDITIONAL", encodeDWORD(0, polyEndian)),
+                ] : [new Opcode("END")];
+                
+                const notTakenStubBytes = notTakenStub.reduce((s, op) => s + op.toBytes().length, 0);
+                newOpcodes.push(new Opcode(lastOpcode.name, condReg, encodeDWORD(notTakenStubBytes + 6, polyEndian)));
+                notTakenStub.forEach(op => newOpcodes.push(op));
+                takenStub.forEach(op => newOpcodes.push(op));
+                needsDispatchJump = true;
+            } else if (lastOpcode.name === "MACRO_TEST_JUMP_EQ" || lastOpcode.name === "MACRO_TEST_JUMP_NOT_EQ") {
+                const targets = getJumpTargetBlock(lastOpcode, block.endOpcodeIndex - 1);
+                const takenState = targets.length > 0 ? targets[0].stateId : null;
+                const nextBlock = validBlocks[validBlocks.indexOf(block) + 1];
+                const notTakenState = nextBlock ? stateIds.get(nextBlock.index) : null;
+                const testDest = lastOpcode.data[0], testSrc = lastOpcode.data[1], jumpReg = lastOpcode.data[2];
+
+                newOpcodes.pop();
+                const notTakenStub = notTakenState ? [
+                    new Opcode("SET", cffStateReg, notTakenState),
+                    new Opcode("JUMP_UNCONDITIONAL", encodeDWORD(0, polyEndian)),
+                ] : [new Opcode("END")];
+                const takenStub = takenState ? [
+                    new Opcode("SET", cffStateReg, takenState),
+                    new Opcode("JUMP_UNCONDITIONAL", encodeDWORD(0, polyEndian)),
+                ] : [new Opcode("END")];
+
+                const notTakenStubBytes = notTakenStub.reduce((s, op) => s + op.toBytes().length, 0);
+                const condJumpName = lastOpcode.name === "MACRO_TEST_JUMP_EQ" ? "JUMP_EQ" : "JUMP_NOT_EQ";
+                newOpcodes.push(new Opcode("TEST", testDest, testSrc));
+                newOpcodes.push(new Opcode(condJumpName, jumpReg, encodeDWORD(notTakenStubBytes + 6, polyEndian)));
+                notTakenStub.forEach(op => newOpcodes.push(op));
+                takenStub.forEach(op => newOpcodes.push(op));
+                needsDispatchJump = true;
+            } else {
+                const nextBlock = validBlocks[validBlocks.indexOf(block) + 1];
+                if (nextBlock) {
+                    newOpcodes.push(new Opcode("SET", cffStateReg, stateIds.get(nextBlock.index)));
+                    newOpcodes.push(new Opcode("JUMP_UNCONDITIONAL", encodeDWORD(0, polyEndian)));
+                    needsDispatchJump = true;
+                } else {
+                    newOpcodes.push(new Opcode("END"));
+                }
+            }
+
+            allRewrittenBlocks.push({
+                opcodes: newOpcodes,
+                stateId: stateIds.get(block.index),
+                needsDispatchJump
+            });
+        }
+    }
+
+    const blockIndices = allRewrittenBlocks.map((_, i) => i);
+    shuffleArray(blockIndices);
+
+    const numEntries = allRewrittenBlocks.length;
+    const realHeaderSize = 1 + 5; // NOP(1) + JUMP_UNCONDITIONAL(5)
+    const realDispatchByteOffset = realHeaderSize;
+
+    const dispatchData = Buffer.alloc(1 + 4 + numEntries * 8);
+    dispatchData[0] = cffStateReg;
+    const writeU32 = (polyEndian === "LE") ? "writeUInt32LE" : "writeUInt32BE";
+    const writeI32 = (polyEndian === "LE") ? "writeInt32LE" : "writeInt32BE";
+    dispatchData[writeU32](numEntries, 1);
+
+    const blocksStartOffset = realHeaderSize + (1 + 1 + 4 + numEntries * 8);
+    let currentOffset = blocksStartOffset;
+    const shuffledBlockOffsets = new Map();
+    for (const idx of blockIndices) {
+        shuffledBlockOffsets.set(idx, currentOffset);
+        const size = allRewrittenBlocks[idx].opcodes.reduce((s, op) => s + op.toBytes().length, 0);
+        currentOffset += size;
+    }
+
+    for (let i = 0; i < numEntries; i++) {
+        const idx = blockIndices[i];
+        const block = allRewrittenBlocks[idx];
+        const entryBase = 5 + i * 8;
+        dispatchData[writeU32](block.stateId, entryBase);
+        const entryOffset = shuffledBlockOffsets.get(idx) - realDispatchByteOffset;
+        let offsetBytes = Buffer.alloc(4);
+        offsetBytes[writeI32](entryOffset, 0);
+        dispatchData.set(offsetBytes, entryBase + 4);
+    }
+
+    const dispatchOpcode = new Opcode("CFF_DISPATCH", dispatchData);
+    const resultOpcodes = [
+        new Opcode("NOP"), // To be replaced by caller if needed
+        new Opcode("JUMP_UNCONDITIONAL", encodeDWORD(realDispatchByteOffset - 1, polyEndian)), // JUMP dispatch
+        dispatchOpcode
+    ];
+
+    let rebuildPos = resultOpcodes.reduce((s, op) => s + op.toBytes().length, 0);
+    for (const idx of blockIndices) {
+        const block = allRewrittenBlocks[idx];
+        for (const op of block.opcodes) {
+            if (op.name === "JUMP_UNCONDITIONAL" && op.data.length === 4 && op.data.readInt32BE(0) === 0) {
+                op.modifyArgs(encodeDWORD(realDispatchByteOffset - rebuildPos, polyEndian));
+            }
+            resultOpcodes.push(op);
+            rebuildPos += op.toBytes().length;
+        }
+    }
+
+    const newChunk = new VMChunk();
+    newChunk.code = resultOpcodes;
+    return { chunk: newChunk, initialStateIds: chunkInitialStateIds };
+}
+
+module.exports = {
+    applyControlFlowFlattening,
+    applyMultiChunkControlFlowFlattening,
+    identifyBlocks,
+    getOffsetPositionsInOpcode,
+    readOffsetFromData,
+    UNSAFE_OPCODES
+};
