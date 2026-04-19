@@ -1,0 +1,19 @@
+var __jsv_ilv_profile = %VM_PROFILE%;
+var __jsv_ilv_key = '%BYTECODE_INTEGRITY_KEY%';
+var __jsv_ilv_sm_key = '%SELF_MODIFY_KEY%';
+var __jsv_ilv_ad_key = '%ANTI_DUMP_KEY%';
+var __jsv_ilv_tl_key = '%TIME_LOCK_KEY%';
+var __jsv_ilv_do_key = '%DISPATCH_OBFUSCATION_KEY%';
+var __jsv_ilv_bytecode = '%BYTECODE%';
+var __jsv_ilv_encoding = '%ENCODING%';
+var __jsv_ilv_selectorReg = %SELECTOR_REG%;
+var __jsv_ilv_cffStateReg = %CFF_STATE_REG%;
+var __jsv_ilv_cffInitState = %CFF_INITIAL_STATE%;
+%ANTI_DEBUG_KEY_SETUP%
+function __jsv_ilv_create() {
+    var VM = new __JSV_RUNTIME(__jsv_ilv_profile);
+    VM.setBytecodeIntegrityKey(__jsv_ilv_key);
+    VM.enableAntiDebug(__jsv_ilv_adbg_key);%SELF_MODIFY_SETUP%%ANTI_DUMP_SETUP%%TIME_LOCK_SETUP%%DISPATCH_OBFUSCATION_SETUP%
+    VM.loadFromString(__jsv_ilv_bytecode, __jsv_ilv_encoding);
+    return VM;
+}

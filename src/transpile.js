@@ -38,6 +38,7 @@ const {shuffle} = require("./utils/random");
 const {insertOpaquePredicates} = require("./utils/opaquePredicates");
 const {applyControlFlowFlattening} = require("./utils/cff");
 const {insertJunkInStream} = require("./utils/junkInStream");
+const {interleaveChunks} = require("./utils/codeInterleaving");
 const {generateTTables, whiteboxEncrypt} = require("./utils/whiteboxCipher");
 const {deriveNestedKey, deriveInnerShuffleSeed} = require("./utils/vmCommon");
 const {innerOpNames: _innerOpNames} = require("./utils/innerOpcodes");
@@ -52,6 +53,8 @@ const {
 } = require("./utils/innerBytecodeCompiler");
 
 const functionWrapperTemplate = fs.readFileSync(path.join(__dirname, "./templates/functionWrapper.template"), "utf-8");
+const interleavedSetupTemplate = fs.readFileSync(path.join(__dirname, "./templates/interleavedSetup.template"), "utf-8");
+const interleavedWrapperTemplate = fs.readFileSync(path.join(__dirname, "./templates/interleavedWrapper.template"), "utf-8");
 const requireTemplate = fs.readFileSync(path.join(__dirname, "./templates/requireTemplate.template"), "utf-8");
 
 const vmDist = fs.readFileSync(path.join(__dirname, './vm_dist.js'), 'utf-8');
@@ -776,6 +779,7 @@ async function transpile(code, options) {
     options.dispatchObfuscation = options.dispatchObfuscation ?? true;
     options.junkInStream = options.junkInStream ?? true;
     options.whiteboxEncryption = options.whiteboxEncryption ?? true;
+    options.codeInterleaving = options.codeInterleaving ?? false;
     options.environmentLock = options.environmentLock ?? null;
     options.vmObfuscationTarget = options.vmObfuscationTarget ?? "node";
     options.transpiledObfuscationTarget = options.transpiledObfuscationTarget ?? "node";
@@ -847,18 +851,18 @@ async function transpile(code, options) {
     const chunks = []
     const rewriteQueue = []
 
-    function virtualizeFunction(node) {
+    function virtualizeFunction(node, sharedConfig) {
         log(new LogData(`Virtualizing Function "${node.id.name}"`, 'info', false));
         const dependencies = analyzeScope(ast, node);
-        const integrityKey = crypto.randomBytes(16).toString("hex");
-        const bytecodeKeyId = `JSVK_${crypto.randomBytes(6).toString("hex")}`;
-        const bytecodeEncryptionKey = crypto.randomBytes(24).toString("base64");
-        const memoryProtectionKey = crypto.randomBytes(16).toString("hex");
-        const antiDebugKey = crypto.randomBytes(16).toString("hex");
-        const selfModifyKey = crypto.randomBytes(16).toString("hex");
-        const antiDumpKey = crypto.randomBytes(16).toString("hex");
-        const timeLockKey = crypto.randomBytes(16).toString("hex");
-        const dispatchObfuscationKey = crypto.randomBytes(16).toString("hex");
+        const integrityKey = sharedConfig ? sharedConfig.integrityKey : crypto.randomBytes(16).toString("hex");
+        const bytecodeKeyId = sharedConfig ? sharedConfig.bytecodeKeyId : `JSVK_${crypto.randomBytes(6).toString("hex")}`;
+        const bytecodeEncryptionKey = sharedConfig ? sharedConfig.bytecodeEncryptionKey : crypto.randomBytes(24).toString("base64");
+        const memoryProtectionKey = sharedConfig ? sharedConfig.memoryProtectionKey : crypto.randomBytes(16).toString("hex");
+        const antiDebugKey = sharedConfig ? sharedConfig.antiDebugKey : crypto.randomBytes(16).toString("hex");
+        const selfModifyKey = sharedConfig ? sharedConfig.selfModifyKey : crypto.randomBytes(16).toString("hex");
+        const antiDumpKey = sharedConfig ? sharedConfig.antiDumpKey : crypto.randomBytes(16).toString("hex");
+        const timeLockKey = sharedConfig ? sharedConfig.timeLockKey : crypto.randomBytes(16).toString("hex");
+        const dispatchObfuscationKey = sharedConfig ? sharedConfig.dispatchObfuscationKey : crypto.randomBytes(16).toString("hex");
         // Polymorphic configuration: derive endianness from integrityKey
         const polyEndian = options.polymorphic
             ? (parseInt(integrityKey.slice(0, 8), 16) & 1 ? "LE" : "BE")
@@ -1011,19 +1015,21 @@ async function transpile(code, options) {
                     });
                 }
                 let cffInitialStateId = 0;
-                if (options.controlFlowFlattening !== false) {
-                    const jumpTargetSeed = JSVM.deriveJumpTargetSeed(integrityKey);
-                    const cffResult = applyControlFlowFlattening(generator.chunk, vmProfile.registerCount - 1, { polyEndian, jumpTargetSeed });
-                    if (cffResult.chunk) {
-                        generator.chunk = cffResult.chunk;
+                if (!sharedConfig) {
+                    if (options.controlFlowFlattening !== false) {
+                        const jumpTargetSeed = JSVM.deriveJumpTargetSeed(integrityKey);
+                        const cffResult = applyControlFlowFlattening(generator.chunk, vmProfile.registerCount - 1, { polyEndian, jumpTargetSeed });
+                        if (cffResult.chunk) {
+                            generator.chunk = cffResult.chunk;
+                        }
+                        cffInitialStateId = cffResult.initialStateId || 0;
                     }
-                    cffInitialStateId = cffResult.initialStateId || 0;
-                }
-                if (options.opaquePredicates !== false && generator.opaqueScratch) {
-                    insertOpaquePredicates(generator.chunk, generator.opaqueScratch, vmProfile.registerCount, {
-                        ...(options.opaquePredicateOptions || {}),
-                        polyEndian
-                    });
+                    if (options.opaquePredicates !== false && generator.opaqueScratch) {
+                        insertOpaquePredicates(generator.chunk, generator.opaqueScratch, vmProfile.registerCount, {
+                            ...(options.opaquePredicateOptions || {}),
+                            polyEndian
+                        });
+                    }
                 }
                 
                 // Set endianness in the VM profile for runtime
@@ -1055,6 +1061,29 @@ async function transpile(code, options) {
 
         const {aliasSetup, generator, params, regToDep, vmProfile, cffInitialStateId} = generationResult;
         chunks.push(generator.chunk)
+
+        // In interleaved mode, store metadata for later merge — skip wrapper template
+        if (sharedConfig) {
+            rewriteQueue.push({
+                result: null,
+                node,
+                chunk: generator.chunk,
+                integrityKey,
+                bytecodeKeyId,
+                bytecodeEncryptionKey,
+                vmProfile,
+                whiteboxTables: null,
+                _interleaved: true,
+                _aliasSetup: aliasSetup,
+                _params: params,
+                _regToDep: regToDep,
+                _outputRegister: generator.outputRegister,
+                _opaqueScratch: generator.opaqueScratch,
+            });
+            log(new LogData(`VM profile ${vmProfile.profileId}: ${vmProfile.registerCount} regs, ${vmProfile.dispatcherVariant} dispatcher`, 'accent', false));
+            log(new LogData(`Function "${node.id.name}" queued for interleaving`, 'success', false));
+            return;
+        }
 
         const cffInit = options.controlFlowFlattening !== false
             ? `VM.write(${vmProfile.registerCount - 1}, ${cffInitialStateId});`
@@ -1128,13 +1157,173 @@ async function transpile(code, options) {
         }
     }
 
+    const virtualizeNodes = [];
     walk.simple(ast, {
         FunctionDeclaration(node) {
             if (node.__virtualize) {
-                virtualizeFunction(node);
+                virtualizeNodes.push(node);
             }
         },
     });
+
+    // Code Interleaving: merge multiple functions into one bytecode blob
+    if (options.codeInterleaving && virtualizeNodes.length >= 2) {
+        const sharedConfig = {
+            integrityKey: crypto.randomBytes(16).toString("hex"),
+            bytecodeKeyId: `JSVK_${crypto.randomBytes(6).toString("hex")}`,
+            bytecodeEncryptionKey: crypto.randomBytes(24).toString("base64"),
+            memoryProtectionKey: crypto.randomBytes(16).toString("hex"),
+            antiDebugKey: crypto.randomBytes(16).toString("hex"),
+            selfModifyKey: crypto.randomBytes(16).toString("hex"),
+            antiDumpKey: crypto.randomBytes(16).toString("hex"),
+            timeLockKey: crypto.randomBytes(16).toString("hex"),
+            dispatchObfuscationKey: crypto.randomBytes(16).toString("hex"),
+        };
+
+        for (const node of virtualizeNodes) {
+            virtualizeFunction(node, sharedConfig);
+        }
+
+        // Collect interleaved entries
+        const ilvEntries = rewriteQueue.filter(e => e._interleaved);
+        if (ilvEntries.length >= 2) {
+            const polyEndian = options.polymorphic
+                ? (parseInt(sharedConfig.integrityKey.slice(0, 8), 16) & 1 ? "LE" : "BE")
+                : "BE";
+
+            // Use the max registerCount across all functions
+            const unifiedRegisterCount = Math.max(...ilvEntries.map(e => e.vmProfile.registerCount));
+
+            // Merge chunks
+            const {mergedChunk, selectorReg} = interleaveChunks(
+                ilvEntries.map(e => ({chunk: e.chunk})),
+                unifiedRegisterCount,
+                {polyEndian}
+            );
+
+            // Collect opaque scratch from all functions
+            const allOpaqueScratch = [];
+            for (const e of ilvEntries) {
+                if (e._opaqueScratch) allOpaqueScratch.push(...e._opaqueScratch);
+            }
+
+            // Apply CFF on merged chunk
+            let cffInitState = 0;
+            if (options.controlFlowFlattening !== false) {
+                const jumpTargetSeed = JSVM.deriveJumpTargetSeed(sharedConfig.integrityKey);
+                const cffResult = applyControlFlowFlattening(mergedChunk, unifiedRegisterCount - 1, { polyEndian, jumpTargetSeed });
+                if (cffResult.chunk) {
+                    // replace merged chunk code
+                    mergedChunk.code.length = 0;
+                    mergedChunk.code.push(...cffResult.chunk.code);
+                }
+                cffInitState = cffResult.initialStateId || 0;
+            }
+
+            // Apply opaque predicates on merged chunk
+            if (options.opaquePredicates !== false && allOpaqueScratch.length > 0) {
+                insertOpaquePredicates(mergedChunk, allOpaqueScratch, unifiedRegisterCount, {
+                    ...(options.opaquePredicateOptions || {}),
+                    polyEndian
+                });
+            }
+
+            // Encode merged chunk
+            const opcodeSeed = JSVM.deriveOpcodeStateSeed(sharedConfig.integrityKey);
+            const jumpSeed = JSVM.deriveJumpTargetSeed(sharedConfig.integrityKey);
+            const instructionSeed = JSVM.deriveInstructionByteSeed(sharedConfig.integrityKey);
+            applyStatefulOpcodeEncoding(mergedChunk, opcodeSeed);
+            applyJumpTargetEncoding(mergedChunk, jumpSeed, polyEndian);
+            applyPerInstructionEncoding(mergedChunk, instructionSeed);
+
+            const mergedBytecode = zlib.deflateSync(Buffer.from(mergedChunk.toBytes())).toString(encoding);
+            const integritySalt = crypto.randomBytes(8).toString("hex");
+            const whiteboxTables = options.whiteboxEncryption ? generateTTables(sharedConfig.bytecodeEncryptionKey) : null;
+            const flags = whiteboxTables ? "IJSW" : "IJS";
+            const protectedBytecode = JSVM.createEncryptedBytecodeEnvelope(
+                mergedBytecode, encoding, sharedConfig.integrityKey,
+                sharedConfig.bytecodeKeyId, sharedConfig.bytecodeEncryptionKey,
+                integritySalt, flags, whiteboxTables
+            );
+
+            // Build unified VM profile
+            const ilvProfile = {
+                ...ilvEntries[0].vmProfile,
+                registerCount: unifiedRegisterCount,
+                polyEndian,
+            };
+
+            // Generate shared setup code
+            const selfModifySetup = options.selfModifyingBytecode !== false
+                ? `VM.enableSelfModifyingBytecode(__jsv_ilv_sm_key);` : "";
+            const antiDumpSetup = options.antiDump !== false
+                ? `VM.enableAntiDump(__jsv_ilv_ad_key);` : "";
+            const timeLockSetup = options.timeLock
+                ? `VM.enableTimeLock(__jsv_ilv_tl_key);` : "";
+            const dispatchObfuscationSetup = options.dispatchObfuscation !== false
+                ? `VM.enableDispatchObfuscation(__jsv_ilv_do_key);` : "";
+
+            let setupCode = interleavedSetupTemplate
+                .replace("%VM_PROFILE%", JSON.stringify(ilvProfile))
+                .replace("%BYTECODE_INTEGRITY_KEY%", sharedConfig.integrityKey)
+                .replace("%SELF_MODIFY_KEY%", sharedConfig.selfModifyKey)
+                .replace("%ANTI_DUMP_KEY%", sharedConfig.antiDumpKey)
+                .replace("%TIME_LOCK_KEY%", sharedConfig.timeLockKey)
+                .replace("%DISPATCH_OBFUSCATION_KEY%", sharedConfig.dispatchObfuscationKey)
+                .replace("%BYTECODE%", protectedBytecode)
+                .replace("%ENCODING%", encoding)
+                .replace("%SELECTOR_REG%", selectorReg.toString())
+                .replace("%CFF_STATE_REG%", (unifiedRegisterCount - 1).toString())
+                .replace("%CFF_INITIAL_STATE%", cffInitState.toString())
+                .replace("%ANTI_DEBUG_KEY_SETUP%", `var __jsv_ilv_adbg_key = '${sharedConfig.antiDebugKey}';`)
+                .replace("%SELF_MODIFY_SETUP%", selfModifySetup)
+                .replace("%ANTI_DUMP_SETUP%", antiDumpSetup)
+                .replace("%TIME_LOCK_SETUP%", timeLockSetup)
+                .replace("%DISPATCH_OBFUSCATION_SETUP%", dispatchObfuscationSetup);
+
+            // Generate per-function wrappers
+            const wrapperCodes = [];
+            for (let i = 0; i < ilvEntries.length; i++) {
+                const entry = ilvEntries[i];
+                const wrapperCode = interleavedWrapperTemplate
+                    .replace("%FN_PREFIX%", entry.node.async ? "async " : "")
+                    .replace("%FUNCTION_NAME%", entry.node.id.name)
+                    .replace("%ARGS%", entry._params.join(","))
+                    .replace("%ARG_SCRAMBLE_SETUP%", entry._aliasSetup)
+                    .replace("%DEPENDENCIES%", JSON.stringify(entry._regToDep).replace(/"/g, ""))
+                    .replace("%FUNCTION_ID%", i.toString())
+                    .replace("%OUTPUT_REGISTER%", entry._outputRegister.toString())
+                    .replace("%RUNCMD%", entry.node.async ? "await VM.runAsync()" : "VM.run()");
+                wrapperCodes.push(wrapperCode);
+            }
+
+            // Patch AST nodes with wrapper bodies
+            for (let i = 0; i < ilvEntries.length; i++) {
+                const entry = ilvEntries[i];
+                const fullWrapper = wrapperCodes[i];
+                entry.node.body.body = acorn.parse(fullWrapper, {ecmaVersion: "latest", sourceType: "module"}).body[0].body.body;
+            }
+
+            // Register keys in VM output
+            const keyReg = `JSVM.registerBytecodeKey('${sharedConfig.bytecodeKeyId}', '${sharedConfig.bytecodeEncryptionKey}');`;
+            const wbReg = whiteboxTables ? `JSVM.setWhiteboxTables('${sharedConfig.bytecodeKeyId}', ${JSON.stringify(whiteboxTables)});` : "";
+
+            // Inject setup code into transpiled output (will be added later)
+            rewriteQueue._interleavedSetup = setupCode;
+            rewriteQueue._interleavedKeyRegistrations = [keyReg, wbReg].filter(Boolean).join("\n");
+
+            // Remove interleaved entries from rewriteQueue (they're already processed)
+            for (let i = rewriteQueue.length - 1; i >= 0; i--) {
+                if (rewriteQueue[i]._interleaved) rewriteQueue.splice(i, 1);
+            }
+
+            log(new LogData(`Interleaved ${ilvEntries.length} functions into one bytecode blob (${unifiedRegisterCount} regs)`, 'success', false));
+        }
+    } else {
+        for (const node of virtualizeNodes) {
+            virtualizeFunction(node);
+        }
+    }
 
     if (options.passes.has("RemoveUnused")) {
         obfuscateOpcodes(chunks, vmAST)
@@ -1360,8 +1549,17 @@ async function transpile(code, options) {
     if (whiteboxTableRegistrations.length > 0) {
         accompanyingVM = `${accompanyingVM}\n${whiteboxTableRegistrations}\n`;
     }
+    if (rewriteQueue._interleavedKeyRegistrations) {
+        accompanyingVM = `${accompanyingVM}\n${rewriteQueue._interleavedKeyRegistrations}\n`;
+    }
 
     let transpiledResult = escodegen.generate(ast);
+
+    // Inject interleaved setup code into AST (after requireInject at index 0)
+    if (rewriteQueue._interleavedSetup) {
+        const setupAST = acorn.parse(rewriteQueue._interleavedSetup, {ecmaVersion: "latest", sourceType: "module"});
+        ast.body.splice(1, 0, ...setupAST.body);
+    }
 
     if (options.passes.has("ObfuscateVM")) {
         accompanyingVM = await obfuscateCode(accompanyingVM, {
