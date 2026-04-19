@@ -1155,9 +1155,9 @@ async function transpile(code, options) {
         })
         } finally {
         }
+
     }
 
-    console.log("Starting walk...");
     const virtualizeNodes = [];
     walk.simple(ast, {
         FunctionDeclaration(node) {
@@ -1169,7 +1169,6 @@ async function transpile(code, options) {
 
     // Code Interleaving: merge multiple functions into one bytecode blob
     if (options.codeInterleaving && virtualizeNodes.length >= 2) {
-        console.log(`Found ${virtualizeNodes.length} virtualized nodes. Starting interleaving...`);
         const sharedConfig = {
             integrityKey: crypto.randomBytes(16).toString("hex"),
             bytecodeKeyId: `JSVK_${crypto.randomBytes(6).toString("hex")}`,
@@ -1197,7 +1196,6 @@ async function transpile(code, options) {
             const unifiedRegisterCount = Math.max(...ilvEntries.map(e => e.vmProfile.registerCount));
 
             // Merge chunks
-            console.log("Interleaving chunks...");
             const {mergedChunk, selectorReg} = interleaveChunks(
                 ilvEntries.map(e => ({chunk: e.chunk})),
                 unifiedRegisterCount,
@@ -1211,7 +1209,6 @@ async function transpile(code, options) {
             }
 
             // Apply CFF on merged chunk
-            console.log("Applying CFF on merged chunk...");
             let cffInitState = 0;
             if (options.controlFlowFlattening !== false) {
                 const jumpTargetSeed = JSVM.deriveJumpTargetSeed(sharedConfig.integrityKey);
@@ -1240,7 +1237,6 @@ async function transpile(code, options) {
             }
 
             // Encode merged chunk
-            console.log("Encoding merged chunk...");
             const opcodeSeed = JSVM.deriveOpcodeStateSeed(sharedConfig.integrityKey);
             const jumpSeed = JSVM.deriveJumpTargetSeed(sharedConfig.integrityKey);
             const instructionSeed = JSVM.deriveInstructionByteSeed(sharedConfig.integrityKey);
@@ -1306,7 +1302,6 @@ async function transpile(code, options) {
                     .replace("%FUNCTION_ID%", i.toString())
                     .replace("%OUTPUT_REGISTER%", entry._outputRegister.toString())
                     .replace("%RUNCMD%", entry.node.async ? "await VM.runAsync()" : "VM.run()");
-                console.log(`WRAPPER[${i}] (${entry.node.id.name}):`, wrapperCode.replace(/\n/g, '\\n'));
                 wrapperCodes.push(wrapperCode);
             }
 
@@ -1314,7 +1309,6 @@ async function transpile(code, options) {
             for (let i = 0; i < ilvEntries.length; i++) {
                 const entry = ilvEntries[i];
                 const fullWrapper = wrapperCodes[i];
-                console.log(`WRAPPER[${i}] (${entry.node.id.name}): ${fullWrapper}`);
                 entry.node.body.body = acorn.parse(fullWrapper, {ecmaVersion: "latest", sourceType: "module"}).body[0].body.body;
             }
 
@@ -1331,7 +1325,6 @@ async function transpile(code, options) {
                 if (rewriteQueue[i]._interleaved) rewriteQueue.splice(i, 1);
             }
 
-            console.log("Interleaving complete.");
             log(new LogData(`Interleaved ${ilvEntries.length} functions into one bytecode blob (${unifiedRegisterCount} regs)`, 'success', false));
         }
     } else {

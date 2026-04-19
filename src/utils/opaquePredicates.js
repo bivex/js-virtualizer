@@ -171,20 +171,23 @@ function insertOpaquePredicates(chunk, opaqueScratch, registerCount, options = {
     let predicatesInserted = 0;
     let sinceLastInsert = 0;
 
-    for (let i = 0; i < code.length; i++) {
-        const opcode = code[i];
+     for (let i = 0; i < code.length; i++) {
+         const opcode = code[i];
 
-        const isSpecial = opcode.name === "END" ||
-            opcode.name === "TRY_CATCH_FINALLY" ||
-            opcode.name === "VFUNC_CALL" ||
-            opcode.name === "VFUNC_SETUP_CALLBACK" ||
-            opcode.name === "VFUNC_RETURN" ||
-            opcode.name === "THROW" ||
-            opcode.name === "THROW_ARGUMENT";
+         const isSpecial = opcode.name === "END" ||
+             opcode.name === "TRY_CATCH_FINALLY" ||
+             opcode.name === "VFUNC_CALL" ||
+             opcode.name === "VFUNC_SETUP_CALLBACK" ||
+             opcode.name === "VFUNC_RETURN" ||
+             opcode.name === "THROW" ||
+             opcode.name === "THROW_ARGUMENT";
 
-        const inVfunc = vfuncRegion.has(i);
+         const inVfunc = vfuncRegion.has(i);
 
-        if (!isSpecial && !inVfunc && sinceLastInsert >= density && predicatesInserted < maxPredicates) {
+         // Prevent splitting CFF's SET + JUMP_UNCONDITIONAL pair
+         const wouldSplitSetJump = newCode.length > 0 && newCode[newCode.length - 1].name === "SET" && opcode.name === "JUMP_UNCONDITIONAL";
+
+         if (!isSpecial && !inVfunc && !wouldSplitSetJump && sinceLastInsert >= density && predicatesInserted < maxPredicates) {
             const genIdx = randomInt(0, PREDICATE_GENERATORS.length);
             const gen = PREDICATE_GENERATORS[genIdx];
             const predicate = gen(rA, rB, rC, rD, polyEndian);

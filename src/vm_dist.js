@@ -1192,7 +1192,7 @@ class JSVM {
         Object.keys(opcodes).forEach((opcode) => {
             this.opcodes[opcodes[opcode]] = implOpcode[opcode].bind(this)
         })
-        const jumpOpcodeNames = ["JUMP_UNCONDITIONAL", "JUMP_EQ", "JUMP_NOT_EQ", "MACRO_TEST_JUMP_EQ", "MACRO_TEST_JUMP_NOT_EQ"]
+        const jumpOpcodeNames = ["JUMP_UNCONDITIONAL", "JUMP_EQ", "JUMP_NOT_EQ", "MACRO_TEST_JUMP_EQ", "MACRO_TEST_JUMP_NOT_EQ", "CFF_DISPATCH"]
         for (const name of jumpOpcodeNames) {
             const idx = opcodes[name]
             const originalHandler = this.opcodes[idx]
@@ -1205,6 +1205,12 @@ class JSVM {
                         const ipAfter = vm.read(registers.INSTRUCTION_POINTER)
                         if (ipAfter < ipBefore) {
                             vm.restoreBytecodeRange(ipAfter, ipBefore)
+                        }
+                    }
+                    if (vm.antiDump) {
+                        const ipAfter = vm.read(registers.INSTRUCTION_POINTER)
+                        if (ipAfter < ipBefore) {
+                            vm.restoreAntiDumpBytecodeRange(ipAfter, ipBefore)
                         }
                     }
                 }
@@ -1387,6 +1393,13 @@ class JSVM {
         for (let i = fromPos; i < toPos; i++) {
             const mask = ((this.antiDumpSeed ^ Math.imul(i + 1, 0x85ebca6b)) >>> 0) & 0xFF
             this.code[i] = mask
+        }
+    }
+
+    restoreAntiDumpBytecodeRange(fromPos, toPos) {
+        if (!this.antiDumpBackup || toPos <= fromPos) return
+        for (let i = fromPos; i < toPos; i++) {
+            this.code[i] = this.antiDumpBackup[i]
         }
     }
 
@@ -1887,6 +1900,12 @@ class JSVM {
             for (let i = 0; i < this.code.length; i++) {
                 const mask = ((this.selfModifySeed ^ Math.imul(i + 1, 0x9e3779b1)) >>> 0) & 0xFF
                 this.codeBackup[i] = this.code[i] ^ mask
+            }
+        }
+        if (this.antiDump && this.code) {
+            this.antiDumpBackup = new Uint8Array(this.code.length)
+            for (let i = 0; i < this.code.length; i++) {
+                this.antiDumpBackup[i] = this.code[i]
             }
         }
     }
