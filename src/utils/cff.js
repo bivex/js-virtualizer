@@ -424,14 +424,12 @@ function applyControlFlowFlattening(chunk, cffStateReg, options = {}) {
         // We want target = blockOffset, so offset = blockOffset - dispatchByteOffset
         const offset = blockOffset - dispatchByteOffset;
         const entryBase = 5 + i * 8;
-        const entryOffsetPosition = entryBase + 4;
         dispatchData[writeU32](stateId, entryBase);
         let offsetBytes = Buffer.alloc(4);
         offsetBytes[writeI32](offset, 0);
-        if (jumpTargetSeed) {
-            offsetBytes = Buffer.from(transformJumpTargetBytes([...offsetBytes], entryOffsetPosition, jumpTargetSeed));
-        }
-        dispatchData.set(offsetBytes, entryOffsetPosition);
+        // Note: do NOT apply transformJumpTargetBytes here - applyJumpTargetEncoding
+        // handles encoding with correct absolute positions later in the pipeline
+        dispatchData.set(offsetBytes, entryBase + 4);
     }
 
     // Now patch all "JUMP_UNCONDITIONAL dispatch" instructions to point to the dispatch opcode
