@@ -261,12 +261,12 @@ function applyControlFlowFlattening(chunk, cffStateReg, options = {}) {
             const targets = getJumpTargetBlock(lastOpcode, block.endOpcodeIndex - 1);
             newOpcodes.pop(); // remove the original jump
             if (targets.length > 0) {
-                newOpcodes.push(new Opcode("SET", cffStateReg, targets[0].stateId));
+                newOpcodes.push(new Opcode("LOAD_DWORD", cffStateReg, encodeDWORD(targets[0].stateId, polyEndian)));
             } else {
                 // Fallback: jump to next block
                 const nextBlockIdx = block.index + 1;
                 if (nextBlockIdx < blocks.length) {
-                    newOpcodes.push(new Opcode("SET", cffStateReg, stateIds.get(nextBlockIdx)));
+                    newOpcodes.push(new Opcode("LOAD_DWORD", cffStateReg, encodeDWORD(stateIds.get(nextBlockIdx), polyEndian)));
                 } else {
                     newOpcodes.push(lastOpcode);
                     rewrittenBlocks.push({ ...block, opcodes: newOpcodes, stateId: stateIds.get(block.index) });
@@ -297,14 +297,14 @@ function applyControlFlowFlattening(chunk, cffStateReg, options = {}) {
 
             // Taken stub: SET cffReg, takenState; JUMP dispatch
             const takenStub = [
-                new Opcode("SET", cffStateReg, takenState),
+                new Opcode("LOAD_DWORD", cffStateReg, encodeDWORD(takenState, polyEndian)),
                 new Opcode("JUMP_UNCONDITIONAL", encodeDWORD(0, polyEndian)), // patched later
             ];
             const takenStubBytes = takenStub.reduce((s, op) => s + op.toBytes().length, 0);
 
             // Not-taken stub: SET cffReg, notTakenState; JUMP dispatch
             const notTakenStub = [
-                new Opcode("SET", cffStateReg, notTakenState),
+                new Opcode("LOAD_DWORD", cffStateReg, encodeDWORD(notTakenState, polyEndian)),
                 new Opcode("JUMP_UNCONDITIONAL", encodeDWORD(0, polyEndian)), // patched later
             ];
 
@@ -340,14 +340,14 @@ function applyControlFlowFlattening(chunk, cffStateReg, options = {}) {
 
             // Not-taken stub
             const notTakenStub = [
-                new Opcode("SET", cffStateReg, notTakenState),
+                new Opcode("LOAD_DWORD", cffStateReg, encodeDWORD(notTakenState, polyEndian)),
                 new Opcode("JUMP_UNCONDITIONAL", encodeDWORD(0, polyEndian)),
             ];
             const notTakenStubBytes = notTakenStub.reduce((s, op) => s + op.toBytes().length, 0);
 
             // Taken stub
             const takenStub = [
-                new Opcode("SET", cffStateReg, takenState),
+                new Opcode("LOAD_DWORD", cffStateReg, encodeDWORD(takenState, polyEndian)),
                 new Opcode("JUMP_UNCONDITIONAL", encodeDWORD(0, polyEndian)),
             ];
 
@@ -367,7 +367,7 @@ function applyControlFlowFlattening(chunk, cffStateReg, options = {}) {
         // Fall-through block: append SET + JUMP to dispatch
         const nextBlockIdx = block.index + 1;
         if (nextBlockIdx < blocks.length) {
-            newOpcodes.push(new Opcode("SET", cffStateReg, stateIds.get(nextBlockIdx)));
+            newOpcodes.push(new Opcode("LOAD_DWORD", cffStateReg, encodeDWORD(stateIds.get(nextBlockIdx), polyEndian)));
             newOpcodes.push(new Opcode("JUMP_UNCONDITIONAL", encodeDWORD(0, polyEndian)));
             rewrittenBlocks.push({ ...block, opcodes: newOpcodes, stateId: stateIds.get(block.index), needsDispatchJump: true });
         } else {
@@ -387,7 +387,7 @@ function applyControlFlowFlattening(chunk, cffStateReg, options = {}) {
     const blockSizes = rewrittenBlocks.map(b => b.opcodes.reduce((s, op) => s + op.toBytes().length, 0));
 
     // Header: SET(2 bytes) + JUMP_UNCONDITIONAL(5 bytes) = 7 bytes
-    const headerSize = 7;
+    const headerSize = 6 + 5; // LOAD_DWORD(6) + JUMP_UNCONDITIONAL(5)
 
     // CFF_DISPATCH size: 1(opcode) + 1(stateReg) + 4(numEntries) + numEntries * 8 = 6 + numEntries*8
     const numEntries = rewrittenBlocks.length;
@@ -420,7 +420,9 @@ function applyControlFlowFlattening(chunk, cffStateReg, options = {}) {
         const blockIdx = blockIndices[i];
         const stateId = stateIds.get(blockIdx);
         const blockOffset = shuffledBlockOffsets.get(blockIdx);
-        const offset = blockOffset;
+        // Store relative offset: VM does target = cur + offset - 1 where cur = dispatchByteOffset + 1
+        // We want target = blockOffset, so offset = blockOffset - dispatchByteOffset
+        const offset = blockOffset - dispatchByteOffset;
         const entryBase = 5 + i * 8;
         const entryOffsetPosition = entryBase + 4;
         dispatchData[writeU32](stateId, entryBase);
@@ -448,7 +450,7 @@ function applyControlFlowFlattening(chunk, cffStateReg, options = {}) {
     // Second pass: compute exact byte positions of each opcode and patch dispatch jumps
     // Build the full opcode array in shuffled order
     const headerOpcodes = [
-        new Opcode("SET", cffStateReg, initialStateId),
+        new Opcode("LOAD_DWORD", cffStateReg, encodeDWORD(initialStateId, polyEndian)),
         new Opcode("JUMP_UNCONDITIONAL", encodeDWORD(0, polyEndian)), // will be patched
     ];
     const dispatchOpcode = new Opcode("CFF_DISPATCH", dispatchData);
@@ -467,20 +469,19 @@ function applyControlFlowFlattening(chunk, cffStateReg, options = {}) {
 
     // JUMP_UNCONDITIONAL = 1(opcode) + 4(data) = 5 bytes
 
-    // Header = 3 + 5 = 8 bytes
-    const realHeaderSize = 3 + 5; // SET(3) + JUMP(5)
+    // Header = 6 + 5 = 11 bytes
+    const realHeaderSize = 6 + 5; // LOAD_DWORD(6) + JUMP(5)
     const realDispatchByteOffset = realHeaderSize;
 
     // Patch header jump to dispatch
-    // JUMP_UNCONDITIONAL: cur = IP after opcode byte = realHeaderSize - 5 + 1 = realHeaderSize - 4
-    // Wait: SET is at byte 0, size 3. JUMP is at byte 3, size 5.
-    // readOpcode reads byte 3 (JUMP opcode), IP = 4.
-    // Handler: cur = this.read(IP) = 4.
-    // readJumpTargetDWORD reads 4 bytes (IP 4-7), IP = 8.
-    // Target = cur + offset - 1 = 4 + offset - 1 = 3 + offset.
+    // LOAD_DWORD is at byte 0, size 6. JUMP is at byte 6, size 5.
+    // readOpcode reads byte 6 (JUMP opcode), IP = 7.
+    // Handler: cur = this.read(IP) = 7.
+    // readJumpTargetDWORD reads 4 bytes (IP 7-10), IP = 11.
+    // Target = cur + offset - 1 = 7 + offset - 1 = 6 + offset.
     // We want target = realDispatchByteOffset (the CFF_DISPATCH opcode position).
-    // So offset = realDispatchByteOffset - 3.
-    headerOpcodes[1].modifyArgs(encodeDWORD(realDispatchByteOffset - 3, polyEndian));
+    // So offset = realDispatchByteOffset - 6.
+    headerOpcodes[1].modifyArgs(encodeDWORD(realDispatchByteOffset - 6, polyEndian));
 
     // Now assemble all blocks in shuffled order and compute their actual byte positions
     const allOpcodes = [...headerOpcodes, dispatchOpcode];

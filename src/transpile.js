@@ -1299,6 +1299,7 @@ async function transpile(code, options) {
                     .replace("%FUNCTION_ID%", i.toString())
                     .replace("%OUTPUT_REGISTER%", entry._outputRegister.toString())
                     .replace("%RUNCMD%", entry.node.async ? "await VM.runAsync()" : "VM.run()");
+                console.log(`WRAPPER[${i}] (${entry.node.id.name}):`, wrapperCode.replace(/\n/g, '\\n'));
                 wrapperCodes.push(wrapperCode);
             }
 
@@ -1306,6 +1307,7 @@ async function transpile(code, options) {
             for (let i = 0; i < ilvEntries.length; i++) {
                 const entry = ilvEntries[i];
                 const fullWrapper = wrapperCodes[i];
+                console.log(`WRAPPER[${i}] (${entry.node.id.name}): ${fullWrapper}`);
                 entry.node.body.body = acorn.parse(fullWrapper, {ecmaVersion: "latest", sourceType: "module"}).body[0].body.body;
             }
 
