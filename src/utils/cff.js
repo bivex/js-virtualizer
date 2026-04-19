@@ -554,9 +554,11 @@ function applyMultiChunkControlFlowFlattening(chunks, cffStateReg, options = {})
     const blocksStartOffset = realHeaderSize + (1 + 1 + 4 + numEntries * 8);
     let currentOffset = blocksStartOffset;
     const shuffledBlockOffsets = new Map();
+    if (globalThis.__JSVM_DEBUG__) console.log(`[CFF] Header size: ${realHeaderSize}, Blocks start: ${blocksStartOffset}`);
     for (const idx of blockIndices) {
         shuffledBlockOffsets.set(idx, currentOffset);
         const size = allRewrittenBlocks[idx].opcodes.reduce((s, op) => s + op.toBytes().length, 0);
+        if (globalThis.__JSVM_DEBUG__) console.log(`[CFF] Block ${idx} at ${currentOffset} (size ${size})`);
         currentOffset += size;
     }
 

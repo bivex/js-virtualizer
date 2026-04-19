@@ -91,6 +91,7 @@ await transpile(source, {
 ### 7. Nested VM (Multi-Layer Virtualization) ✅
 
 Virtualize the VM itself through a second VM layer (`InnerVM`) for critical opcode handlers (`ADD`, `FUNC_CALL`, `CFF_DISPATCH`).
+
 **Implemented in:** `src/utils/innerVmCodegen.js` (InnerVM source), `src/utils/innerBytecodeCompiler.js` (Handler compilation), `src/transpile.js` (Trampoline injection).
 
 **How it works:**
