@@ -1734,5 +1734,7 @@ if (typeof module !== 'undefined' && module.exports) {
 } else if (typeof globalThis !== 'undefined') {
     globalThis.JSVM = JSVM;
 }
-JSVM.registerBytecodeKey('JSVK_113ce9f72a1e', '4Q5PefzVeAQz52k7Y74np6MlIJ1niiGo');
-JSVM.registerBytecodeKey('JSVK_7da8bd78517c', 'k6cdlvuoB2ThfrIW8Pq9zKSdFLh1rG14');
+JSVM.registerBytecodeKey('JSVK_2a75d84fd3b5', 'qVwjt6TZ6yCAlhDcq3n2bWZsMzq6pmqD');
+JSVM.registerBytecodeKey('JSVK_a4f40c4be40e', 'H0250VJwJ1QVJBI0kBxNtL2DbtvDTVa6');
+JSVM.registerBytecodeKey('JSVK_cc5b8cf4c2d8', 'vpxlTJyKq8nKLp40R/0YOOtUn/PUFYBJ');
+JSVM.registerBytecodeKey('JSVK_610de3058196', 'fpi9O5zoG9Km5GMpMEEKTQO2bD/KVGsZ');

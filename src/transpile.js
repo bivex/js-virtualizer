@@ -992,14 +992,36 @@ async function transpile(code, options) {
             groupResults.push({ node, generator, params, regToDep, aliasSetup });
         }
 
+        // After processing all functions in the merge group, we have rawChunks and groupResults
         const jumpTargetSeed = JSVM.deriveJumpTargetSeed(integrityKey);
-        const { chunk: mergedChunk, initialStateIds } = applyMultiChunkControlFlowFlattening(rawChunks, sharedProfile.registerCount - 1, { polyEndian, jumpTargetSeed });
-        
-        chunks.push(mergedChunk);
+        let chunksForGroup; // array of chunks to add to global chunks
+        let initialStateIdsForGroup; // parallel array of initialStateId for each function
 
+        if (options.controlFlowFlattening !== false) {
+            // Apply CFF merging: all functions share one merged chunk
+            const cffResult = applyMultiChunkControlFlowFlattening(rawChunks, sharedProfile.registerCount - 1, {
+                polyEndian, jumpTargetSeed
+            });
+            chunksForGroup = [cffResult.chunk];
+            initialStateIdsForGroup = cffResult.initialStateIds;
+        } else {
+            // No CFF: each function remains separate; no merging
+            chunksForGroup = rawChunks;
+            initialStateIdsForGroup = rawChunks.map(() => 0);
+        }
+
+        // Add group's chunks to the global chunks array
+        for (const ch of chunksForGroup) {
+            chunks.push(ch);
+        }
+
+        // Create a wrapper for each function
         for (let i = 0; i < groupResults.length; i++) {
             const { node, generator, params, regToDep, aliasSetup } = groupResults[i];
-            const initialStateId = initialStateIds[i];
+            const initialStateId = initialStateIdsForGroup[i];
+            // Choose chunk for this function: if merged, use the single merged chunk (index 0); else use its own chunk (index i)
+            const functionChunk = options.controlFlowFlattening !== false ? chunksForGroup[0] : chunksForGroup[i];
+
             const bytecodeKeyId = `JSVK_${crypto.randomBytes(6).toString("hex")}`;
             const bytecodeEncryptionKey = crypto.randomBytes(24).toString("base64");
 
@@ -1015,7 +1037,7 @@ async function transpile(code, options) {
                 .replace("%BYTECODE_INTEGRITY_KEY%", integrityKey)
                 .replace("%ANTI_DEBUG_SETUP%", `VM.enableAntiDebug('${crypto.randomBytes(16).toString("hex")}');`)
                 .replace("%CFF_STATE_INIT%", `VM.write(${sharedProfile.registerCount - 1}, ${initialStateId});`)
-                .replace("%ENVIRONMENT_CHECK%", "") // environment lock handled at group level if needed
+                .replace("%ENVIRONMENT_CHECK%", "")
                 .replace("%ENCODING%", "base64")
                 .replace("%DEPENDENCIES%", JSON.stringify(regToDep).replace(/"/g, ""))
                 .replace("%OUTPUT_REGISTER%", generator.outputRegister.toString())
@@ -1024,12 +1046,12 @@ async function transpile(code, options) {
             rewriteQueue.push({
                 result: virtualizedFunction,
                 node,
-                chunk: mergedChunk,
+                chunk: functionChunk,
                 integrityKey,
                 bytecodeKeyId,
                 bytecodeEncryptionKey,
                 vmProfile: sharedProfile,
-                isMerged: true
+                isMerged: options.controlFlowFlattening !== false
             });
         }
     }
