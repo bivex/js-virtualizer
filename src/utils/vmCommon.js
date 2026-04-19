@@ -1015,7 +1015,6 @@ function createDispatchObfuscationProfile(key) {
 
     return {
         phaseTable,
-        realSlotIndices,
         totalSlots,
         seed,
     };
