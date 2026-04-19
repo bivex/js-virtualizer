@@ -9,7 +9,10 @@ Insert compile-time-known conditions that are non-obvious during static analysis
 Transform the VM dispatch loop into a finite state machine with a state variable. Each basic block becomes a case in a switch, transitions go through the state variable. Standard in commercial protectors (VMProtect, Themida). Implemented in `src/utils/cff.js`.
 
 ### 4. Self-Modifying Bytecode ✅
-Bytecode mutates itself during execution — upcoming instructions decode only after preceding ones execute. Kills memory dumps and static disassemblers. Implemented in `src/vm_dev.js` + `src/vm_dist.js`.
+Insert compile-time-known conditions that are non-obvious during static analysis. Always-true branches carry real code, always-false branches carry junk. Complicates symbolic execution and deobfuscation. Implemented in `src/vm_dev.js` + `src/vm_dist.js`.
+
+### 5. Nested VM (Multi-Layer Virtualization) ✅
+Virtualize the VM itself or critical opcode handlers through a second VM. This adds an extra layer of abstraction that makes reverse engineering exponential harder. Implemented in `src/utils/innerVmCodegen.js` + `src/utils/innerBytecodeCompiler.js`.
 
 ---
 
@@ -85,10 +88,28 @@ await transpile(source, {
 
 ---
 
-## Medium Priority
+### 7. Nested VM (Multi-Layer Virtualization) ✅
 
-### 7. Nested VM (Multi-Layer Virtualization)
-Virtualize the VM itself or critical opcode handlers through a second VM. Classic commercial protector approach.
+Virtualize the VM itself through a second VM layer (`InnerVM`) for critical opcode handlers (`ADD`, `FUNC_CALL`, `CFF_DISPATCH`).
+**Implemented in:** `src/utils/innerVmCodegen.js` (InnerVM source), `src/utils/innerBytecodeCompiler.js` (Handler compilation), `src/transpile.js` (Trampoline injection).
+
+**How it works:**
+- Critical VM handlers are replaced with **trampolines** during transpilation.
+- These trampolines load a specialized, encrypted bytecode into a lightweight `InnerVM` instance.
+- The `InnerVM` executes the logic (e.g., adding two registers) and writes the result back to the `OuterVM`.
+- This creates a "Russian Doll" effect where the re-verser must de-virtualize two layers of different ISAs to understand a single operation.
+- **Trampoline Security:** Each build uses a unique `nestedKey` (derived from the integrity key) to decrypt the inner bytecode at runtime.
+
+**Option API:**
+```js
+await transpile(source, {
+    nestedVM: true,  // default: true
+});
+```
+
+---
+
+## Medium Priority
 
 ### 8. Code Interleaving (Function Merging)
 Merge bytecode from multiple virtualized functions into a single dispatch loop with separate state machines. Reversers cannot isolate individual functions.
@@ -109,4 +130,4 @@ The `run()` loop is relatively readable. Run it through control flow flattening 
 
 ---
 
-**Next priority:** Nested VM (item 7) — virtualize the VM itself through a second VM layer for critical opcode handlers.
+**Next priority:** Finalize stabilization of Nested VM CFF alignment and register propagation in complex branching scenarios.
