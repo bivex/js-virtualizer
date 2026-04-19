@@ -100,6 +100,13 @@ async function main() {
         fileName: "browser-fingerprint-demo.js",
         writeOutput: false,
         codeInterleaving: true,
+        controlFlowFlattening: true,
+        selfModifyingBytecode: true,
+        antiDump: true,
+        opaquePredicates: true,
+        dispatchObfuscation: true,
+        deadCodeInjection: true,
+        memoryProtection: true,
         passes: ["RemoveUnused", "ObfuscateVM", "ObfuscateTranspiled"],
         vmObfuscationTarget: "browser",
         transpiledObfuscationTarget: "browser"
