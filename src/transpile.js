@@ -1499,15 +1499,17 @@ async function transpile(code, options) {
                     const trampolineSrc = `function() {
                         var fn = this.readByte(), dst = this.readByte(), funcThis = this.readByte(), args = this.readArray();
                         if (!this._innerVM) this._innerVM = new InnerVM(this);
-                        this._innerVM.regs[0] = this.read(fn);
-                        this._innerVM.regs[1] = this.read(funcThis);
                         var prog = InnerVM.decryptProgram(InnerVM.programs.FUNC_CALL, ${nestedKey >>> 0});
-                        prog[4] = args.length;
+                        prog[2] = fn;
+                        prog[5] = funcThis;
+                        prog[10] = args.length;
                         for (var ai = 0; ai < args.length && ai < 8; ai++) {
-                            prog[5 + ai] = 6 + ai;
-                            this._innerVM.regs[6 + ai] = args[ai];
+                            prog[11 + ai] = 6 + ai;
                         }
                         this._innerVM.loadProgram(prog);
+                        for (var ai = 0; ai < args.length && ai < 8; ai++) {
+                            this._innerVM.regs[6 + ai] = this.read(args[ai]);
+                        }
                         this._innerVM.run();
                         this.write(dst, this._innerVM.regs[3]);
                     }`;
