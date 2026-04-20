@@ -1168,6 +1168,7 @@ async function transpile(code, options) {
     });
 
     // Code Interleaving: merge multiple functions into one bytecode blob
+    let ilvSharedConfig = null;
     if (options.codeInterleaving && virtualizeNodes.length >= 2) {
         console.log(`Found ${virtualizeNodes.length} virtualized nodes. Starting interleaving...`);
         const sharedConfig = {
@@ -1181,6 +1182,7 @@ async function transpile(code, options) {
             timeLockKey: crypto.randomBytes(16).toString("hex"),
             dispatchObfuscationKey: crypto.randomBytes(16).toString("hex"),
         };
+        ilvSharedConfig = sharedConfig;
 
         for (const node of virtualizeNodes) {
             virtualizeFunction(node, sharedConfig);
@@ -1298,6 +1300,7 @@ async function transpile(code, options) {
                     .replace("%DEPENDENCIES%", JSON.stringify(entry._regToDep).replace(/"/g, ""))
                     .replace("%FUNCTION_ID%", i.toString())
                     .replace("%OUTPUT_REGISTER%", entry._outputRegister.toString())
+                    .replace("%CFF_INNER_PROGRAM%", "")
                     .replace("%RUNCMD%", entry.node.async ? "await VM.runAsync()" : "VM.run()");
                 wrapperCodes.push(wrapperCode);
             }
@@ -1336,13 +1339,21 @@ async function transpile(code, options) {
     }
 
     // Nested VM: inject InnerVM and replace critical handlers with trampolines
-    if (options.nestedVM && rewriteQueue.length > 0) {
-        const integrityKey = rewriteQueue[0].integrityKey;
-        const nestedKey = deriveNestedKey(integrityKey);
-        const innerShuffleSeed = deriveInnerShuffleSeed(integrityKey);
+    let nestedKey = 0;
+    let innerShuffleSeed = 0;
+    const hasVirtualizedFunctions = virtualizeNodes.length > 0;
+    if (options.nestedVM && hasVirtualizedFunctions) {
+        const integrityKey = rewriteQueue.length > 0
+            ? rewriteQueue[0].integrityKey
+            : (ilvSharedConfig ? ilvSharedConfig.integrityKey : null);
+        if (!integrityKey) {
+            log(new LogData("Nested VM: no integrity key found, skipping", 'warn', false));
+        } else {
+        nestedKey = deriveNestedKey(integrityKey);
+        innerShuffleSeed = deriveInnerShuffleSeed(integrityKey);
 
         // Inject InnerVM class into vmAST
-        const innerVMSrc = generateInnerVMSource();
+        const innerVMSrc = generateInnerVMSource(_innerOpNames);
         const innerVMAST = acorn.parse(innerVMSrc, {ecmaVersion: "latest", sourceType: "module"});
 
         // Find JSVM class in vmAST and insert InnerVM before it
@@ -1503,33 +1514,93 @@ async function transpile(code, options) {
                     funcCallHandler.value = acorn.parse(`(${trampolineSrc})`, {ecmaVersion: "latest"}).body[0].expression;
                 }
 
-                // Replace CFF_DISPATCH handler with trampoline
                 const cffHandler = handlerMap.properties.find((p) => p.key && p.key.name === "CFF_DISPATCH");
                 if (cffHandler) {
                     const cffTrampolineSrc = `function() {
-                        var cur = this.read(0) - 1;
                         var stateReg = this.readByte();
                         var currentState = this.read(stateReg);
                         var numEntries = this.readDWORD();
                         for (var i = 0; i < numEntries; i++) {
-                            var entryState = this.readDWORD();
-                            var entryOffset = this.readDWORD();
-                            if (currentState === entryState) {
-                                this.write(0, entryOffset);
-                                return;
-                            }
+                            this.readDWORD();
+                            this.readJumpTargetDWORD();
                         }
+                        if (!this._innerVM) this._innerVM = new InnerVM(this);
+                        var cffHex = this._cffInnerHex;
+                        if (!cffHex) throw new Error("CFF inner program missing");
+                        var prog = InnerVM.decryptProgram(cffHex, ${nestedKey >>> 0});
+                        this._innerVM.loadProgram(prog);
+                        this._innerVM.patchDWORD(2, currentState);
+                        this._innerVM.run();
                     }`;
                     cffHandler.value = acorn.parse(`(${cffTrampolineSrc})`, {ecmaVersion: "latest"}).body[0].expression;
                 }
             }
         }
+        } // end if integrityKey
     }
 
-    rewriteQueue.forEach(({result, node, chunk, integrityKey, bytecodeKeyId, bytecodeEncryptionKey, vmProfile, whiteboxTables}) => {
+    rewriteQueue.forEach(({result: _result, node, chunk, integrityKey, bytecodeKeyId, bytecodeEncryptionKey, vmProfile, whiteboxTables}) => {
+        let result = _result;
         const opcodeSeed = JSVM.deriveOpcodeStateSeed(integrityKey);
         const jumpSeed = JSVM.deriveJumpTargetSeed(integrityKey);
         const instructionSeed = JSVM.deriveInstructionByteSeed(integrityKey);
+
+        let cffInnerProgram = "";
+        if (options.nestedVM) {
+            const cffOpIndex = chunk.code.findIndex(op => op.name === "CFF_DISPATCH");
+            if (cffOpIndex !== -1) {
+                const cffOp = chunk.code[cffOpIndex];
+                const data = cffOp.data;
+                const polyEndian = vmProfile.polyEndian || "BE";
+                const readU32 = polyEndian === "LE"
+                    ? (buf, off) => buf.readUInt32LE(off)
+                    : (buf, off) => buf.readUInt32BE(off);
+
+                const numEntries = readU32(data, 1);
+                const entryPairs = [];
+                for (let i = 0; i < numEntries; i++) {
+                    const base = 5 + i * 8;
+                    entryPairs.push({
+                        entryState: readU32(data, base),
+                        entryOffset: readU32(data, base + 4)
+                    });
+                }
+
+                let cffBytePos = 0;
+                for (let i = 0; i < cffOpIndex; i++) {
+                    cffBytePos += chunk.code[i].toBytes().length;
+                }
+                const cur = cffBytePos + 1;
+
+                const cffBuilder = compileCffDispatchInnerBytecode();
+                const {bytecode: cffBc, patchTable: cffPt} = cffBuilder.build(entryPairs, cur, 0);
+
+                const values = [0];
+                for (const pair of entryPairs) {
+                    values.push(pair.entryState);
+                    values.push(cur + pair.entryOffset - 1);
+                }
+                for (const patch of cffPt) {
+                    const value = values[patch.operand];
+                    cffBc[patch.position] = (value >>> 24) & 0xFF;
+                    cffBc[patch.position + 1] = (value >>> 16) & 0xFF;
+                    cffBc[patch.position + 2] = (value >>> 8) & 0xFF;
+                    cffBc[patch.position + 3] = value & 0xFF;
+                }
+
+                if (innerShuffleSeed !== 0) {
+                    const {remap} = shuffleInnerOpcodes(innerShuffleSeed);
+                    const remappedBc = remapInnerBytecode(cffBc, remap);
+                    const encryptedBc = encryptInnerBytecode(remappedBc, nestedKey);
+                    cffInnerProgram = `VM._cffInnerHex = '${encryptedBc.toString("hex")}';`;
+                } else {
+                    const encryptedBc = encryptInnerBytecode(cffBc, nestedKey);
+                    cffInnerProgram = `VM._cffInnerHex = '${encryptedBc.toString("hex")}';`;
+                }
+            }
+        }
+        result = result.replace("%CFF_INNER_PROGRAM%", cffInnerProgram);
+
         applyStatefulOpcodeEncoding(chunk, opcodeSeed);
         applyJumpTargetEncoding(chunk, jumpSeed, vmProfile.polyEndian);
         applyPerInstructionEncoding(chunk, instructionSeed);

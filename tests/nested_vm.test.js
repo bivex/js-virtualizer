@@ -116,15 +116,27 @@ describe("nested VM", () => {
     });
 
     test("nested VM shuffle changes InnerVM handlers order", async () => {
-        const code = `// @virtualize function add(a,b){return a+b} console.log(add(1,2))`;
+        const code = `// @virtualize
+        function add(a,b){return a+b}
+        console.log(add(1,2))`;
         const result1 = await transpile(code, { fileName: "shuf1", nestedVM: true, passes:["RemoveUnused"] });
         const result2 = await transpile(code, { fileName: "shuf2", nestedVM: true, passes:["RemoveUnused"] });
 
         // Two builds should produce different InnerVM handler orderings (seeded from integrityKey)
         // Extract handlers arrays from VM output
         const extractHandlers = vmCode => {
-            const m = vmCode.match(/this\.handlers\s*=\s*\[([\s\S]*?)\]/);
-            return m ? m[1] : '';
+            const start = vmCode.indexOf('this.handlers = [');
+            if (start === -1) return '';
+            const arrayStart = vmCode.indexOf('[', start);
+            let depth = 0;
+            for (let i = arrayStart; i < vmCode.length; i++) {
+                if (vmCode[i] === '[') depth++;
+                else if (vmCode[i] === ']') {
+                    depth--;
+                    if (depth === 0) return vmCode.substring(arrayStart, i + 1);
+                }
+            }
+            return '';
         };
         const h1 = extractHandlers(result1.vm);
         const h2 = extractHandlers(result2.vm);
