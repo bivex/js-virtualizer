@@ -3,6 +3,7 @@
     VM.loadDependencies(%DEPENDENCIES%);
     VM.write(__jsv_ilv_selectorReg, %FUNCTION_ID%);
     VM.write(__jsv_ilv_cffStateReg, __jsv_ilv_cffInitState);
+    %CFF_INNER_PROGRAM%
     %RUNCMD%;
     return VM.read(%OUTPUT_REGISTER%);
 }
