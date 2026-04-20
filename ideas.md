@@ -63,19 +63,22 @@ await transpile(source, {
 
 **How it works:** The transpiler injects a runtime check that compares `window.location.hostname` (browser) or `os.hostname()` (Node) against the expected value. If mismatched, the VM silently produces garbage results instead of crashing (anti-tampering). The code interleaving spreads dead instructions throughout the VM body, further complicating analysis.
 
----
+### 5. Code Interleaving (Function Merging) ✅
+Merge bytecode from multiple virtualized functions into a single dispatch loop with separate state machines. Reversers cannot isolate individual functions. Implemented in `src/utils/codeInterleaving.js`, `src/transpile.js` (codeInterleaving option), `src/templates/interleavedSetup.template`, `src/templates/interleavedWrapper.template`.
 
-## Medium Priority
+**Option API:**
+```js
+await transpile(source, {
+    codeInterleaving: true,  // default: false
+});
+```
 
-### 7. Nested VM (Multi-Layer Virtualization)
+### 6. Nested VM (Multi-Layer Virtualization)
 Virtualize the VM itself or critical opcode handlers through a second VM. Classic commercial protector approach.
-
-### 8. Code Interleaving (Function Merging)
-Merge bytecode from multiple virtualized functions into a single dispatch loop with separate state machines. Reversers cannot isolate individual functions.
 
 ## Experimental
 
-### 9. Junk Instructions In-Stream ✅
+### 7. Junk Instructions In-Stream ✅
 Interleaves dead instructions (LOAD_DWORD, LOAD_STRING, NOP, TEST, ADD) between real bytecode instructions. Uses high dead registers (registerCount-20 to registerCount-5) to avoid clobbering live values. No conditional jumps needed — junk executes harmlessly. Density: 6-10 instructions between insertions. Implemented in `src/utils/junkInStream.js`, integrated in `src/transpile.js`.
 
 **Option API:**
@@ -85,7 +88,7 @@ await transpile(source, {
 });
 ```
 
-### 10. White-Box Key Encryption ✅
+### 8. White-Box Key Encryption ✅
 Replaces the simple XOR stream cipher with a T-table based construction. A 256-entry bijection lookup table (seeded from the encryption key) is generated per build. The T-table IS the key — extracting the original key from the table requires solving an underdetermined system. Decryption applies inverse T-table substitution + position-dependent XOR mask. T-tables are emitted as JS arrays in the VM source, making the key inseparable from the code. Implemented in `src/utils/whiteboxCipher.js`, `src/vm_dev.js` + `src/vm_dist.js` (whitebox decrypt in envelope unpacking).
 
 **Option API:**
@@ -95,7 +98,7 @@ await transpile(source, {
 });
 ```
 
-### 11. Time-Lock / Proof-of-Work ✅
+### 9. Time-Lock / Proof-of-Work ✅
 Before the dispatch loop starts, solve a hash-chain PoW challenge. The solution is mixed into `runtimeOpcodeState`, so skipping silently corrupts dispatch. Fixed ~12-bit difficulty (~50-200ms delay per invocation). Implemented in `src/utils/timeLock.js`, `src/vm_dev.js` + `src/vm_dist.js` (`enableTimeLock`, `solveTimeLockChallenge`).
 
 **Option API:**
@@ -105,7 +108,7 @@ await transpile(source, {
 });
 ```
 
-### 12. Dispatch Loop Obfuscation ✅
+### 10. Dispatch Loop Obfuscation ✅
 The `run()` loop is replaced with a phase-based state machine with indirect dispatch. Phase functions (FETCH, DECODE, PRE_EXEC, EXECUTE, POST) are stored in a shuffled array with dummy phases interleaved. The shuffle order is seeded per build. No readable `while(true)` pattern in output. Implemented in `src/utils/vmCommon.js` (`createDispatchObfuscationProfile`), `src/vm_dev.js` + `src/vm_dist.js` (`enableDispatchObfuscation`, phase handlers).
 
 **Option API:**
@@ -117,4 +120,4 @@ await transpile(source, {
 
 ---
 
-**Next priority:** Nested VM (item 7) — virtualize the VM itself through a second VM layer for critical opcode handlers.
+**Next priority:** Nested VM (item 6) — virtualize the VM itself through a second VM layer for critical opcode handlers.
