@@ -107,6 +107,7 @@ async function main() {
         dispatchObfuscation: true,
         deadCodeInjection: true,
         memoryProtection: true,
+        nestedVM: true,
         passes: ["RemoveUnused", "ObfuscateVM", "ObfuscateTranspiled"],
         vmObfuscationTarget: "browser",
         transpiledObfuscationTarget: "browser"
