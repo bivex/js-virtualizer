@@ -11,7 +11,7 @@ function generateInnerVMSource(shuffledOpNames) {
         "I_LOAD_BYTE": "function() { 'I_LOAD_BYTE'; var r = this.program[this.ip++]; this.regs[r] = this.program[this.ip++]; }",
         "I_LOAD_DWORD": "function() { 'I_LOAD_DWORD'; var r = this.program[this.ip++]; var b1 = this.program[this.ip++]; var b2 = this.program[this.ip++]; var b3 = this.program[this.ip++]; var b4 = this.program[this.ip++]; this.regs[r] = (b1 << 24 | b2 << 16 | b3 << 8 | b4) | 0; }",
         "I_READ_OUTER": "function() { 'I_READ_OUTER'; var ir = this.program[this.ip++]; var or = this.program[this.ip++]; this.regs[ir] = this.outerVM.read(or); }",
-        "I_WRITE_OUTER": "function() { 'I_WRITE_OUTER'; var or = this.program[this.ip++]; var ir = this.program[this.ip++]; this.outerVM.write(or, this.regs[ir]); }",
+        "I_WRITE_OUTER": "function() { 'I_WRITE_OUTER'; var or = this.program[this.ip++]; var ir = this.program[this.ip++]; if (or === 0) { this.outerVM.registers[0] = this.regs[ir]; } else { this.outerVM.write(or, this.regs[ir]); } }",
         "I_ADD": "function() { 'I_ADD'; var d = this.program[this.ip++]; var l = this.program[this.ip++]; var r = this.program[this.ip++]; this.regs[d] = this.regs[l] + this.regs[r]; }",
         "I_SUBTRACT": "function() { 'I_SUBTRACT'; var d = this.program[this.ip++]; var l = this.program[this.ip++]; var r = this.program[this.ip++]; this.regs[d] = (this.regs[l] - this.regs[r]) | 0; }",
         "I_XOR": "function() { 'I_XOR'; var d = this.program[this.ip++]; var l = this.program[this.ip++]; var r = this.program[this.ip++]; this.regs[d] = (this.regs[l] ^ this.regs[r]) >>> 0; }",

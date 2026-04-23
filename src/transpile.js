@@ -1522,28 +1522,23 @@ async function transpile(code, options) {
 
             // Add CFF dispatch program builder to InnerVM
             // Uses numeric opcode constants directly (no external dependencies)
+            const remapArr = remap;
             const buildCffCode = `InnerVM.buildCffProgram = function(pairs, ipRegIndex) {
+                var remap = ${JSON.stringify(remapArr)};
                 var bytes = [];
                 var patchTable = [];
                 var numEntries = pairs.length / 2;
                 for (var i = 0; i < numEntries; i++) {
-                    // I_LOAD_DWORD(1) r1, {entryState placeholder}
-                    bytes.push(1, 1, 0, 0, 0, 0);
+                    bytes.push(remap[1], 1, 0, 0, 0, 0);
                     patchTable.push({position: bytes.length - 4, operand: i * 2});
-                    // I_EQ(9) r2, r0, r1
-                    bytes.push(9, 2, 0, 1);
-                    // I_JZ(10) r2, skip over match handling (10 bytes: LOAD_DWORD(6) + WRITE_OUTER(3) + END(1))
-                    bytes.push(10, 2, 10, 0, 0, 0);
-                    // I_LOAD_DWORD(1) r3, {targetIP placeholder}
-                    bytes.push(1, 3, 0, 0, 0, 0);
+                    bytes.push(remap[9], 2, 0, 1);
+                    bytes.push(remap[10], 2, 10, 0, 0, 0);
+                    bytes.push(remap[1], 3, 0, 0, 0, 0);
                     patchTable.push({position: bytes.length - 4, operand: i * 2 + 1});
-                    // I_WRITE_OUTER(3) {ipRegIndex}, r3
-                    bytes.push(3, ipRegIndex & 0xFF, 3);
-                    // I_END(15)
-                    bytes.push(15);
+                    bytes.push(remap[3], ipRegIndex & 0xFF, 3);
+                    bytes.push(remap[15]);
                 }
-                // Final I_END(15) — no match found
-                bytes.push(15);
+                bytes.push(remap[15]);
                 return {bytecode: bytes, patchTable: patchTable};
             }`;
             const buildCffAST = acorn.parse(buildCffCode, {ecmaVersion: "latest", sourceType: "module"});

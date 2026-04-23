@@ -707,7 +707,6 @@ const implOpcode = {
         this.write(register, value);
     }, LOAD_DWORD: function () {
         const register = this.readByte(), value = this.readDWORD();
-        console.log(`[VM-OP] LOAD_DWORD reg=${register} val=${value}`);
         this.write(register, value);
     }, LOAD_FLOAT: function () {
         const register = this.readByte(), value = this.readFloat();
@@ -1023,7 +1022,6 @@ const implOpcode = {
     }, EQ: function () {
         const dest = this.readByte(), left = this.readByte(), right = this.readByte();
         const lv = this.read(left), rv = this.read(right);
-        console.log(`[VM-OP] EQ dest=${dest} left=${left}(${lv}) right=${right}(${rv}) res=${lv === rv}`);
         this.write(dest, lv === rv);
     }, NOT_EQ_COERCE: function () {
         const dest = this.readByte(), left = this.readByte(), right = this.readByte();
