@@ -214,6 +214,28 @@ const opNames = [
     "ITERATOR_VALUE",
     // [dest, src]
     "GET_PROPERTIES",
+    // advanced control flow
+    // [indexReg, numEntries:DWORD, (caseValue:DWORD, offset:DWORD)×N, defaultOffset:DWORD]
+    "CFF_JUMP_TABLE",
+    // [indexReg, shiftReg, numEntries:DWORD, (scrambledKey:DWORD, offset:DWORD)×N, defaultOffset:DWORD]
+    "CFF_COMPUTED_GOTO",
+
+    // dynamic code loading
+    // [srcReg, keyReg] : loads encrypted bytecode from srcReg into internal buffer
+    "DYN_LOAD",
+    // [entryOffset:DWORD] : executes loaded bytecode starting at entryOffset
+    "DYN_EXEC",
+    // [srcReg, patchOffset:DWORD, length:DWORD] : hot-patches bytecode at runtime
+    "DYN_PATCH",
+
+    // memory layout obfuscation
+    // [seed:DWORD, numRegions:BYTE, (startReg, sizeReg)×N] : shuffles memory regions
+    "MEM_SHUFFLE",
+    // [canaryReg, expectedValue:DWORD, failOffset:DWORD] : stack canary check
+    "MEM_CANARY",
+    // [seed:DWORD, numBanks:BYTE, bankSize:BYTE] : rotates register banks
+    "REG_ROTATE",
+
     // misc
     "NOP",
     // none

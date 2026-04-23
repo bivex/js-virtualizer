@@ -37,6 +37,9 @@ const {desugarStatementList} = require("./utils/desugar");
 const {shuffle} = require("./utils/random");
 const {insertOpaquePredicates} = require("./utils/opaquePredicates");
 const {applyControlFlowFlattening} = require("./utils/cff");
+const {applyJumpTableCFF, applyMultiLevelCFF} = require("./utils/advancedCff");
+const {injectCanaries, injectRegisterRotations, injectFakeStackFrames} = require("./utils/memoryLayout");
+const {createSeedFromString} = require("./utils/vmCommon");
 const {insertJunkInStream} = require("./utils/junkInStream");
 const {interleaveChunks} = require("./utils/codeInterleaving");
 const {generateTTables, whiteboxEncrypt} = require("./utils/whiteboxCipher");
@@ -1044,6 +1047,34 @@ async function transpile(code, options) {
                             generator.chunk = cffResult.chunk;
                         }
                         cffInitialStateId = cffResult.initialStateId || 0;
+
+                        // Advanced CFF: jump table dispatch for switch-like patterns
+                        if (options.advancedCFF === true) {
+                            try {
+                                applyJumpTableCFF(generator.chunk, vmProfile.registerCount - 2, vmProfile.registerCount - 1, { polyEndian });
+                            } catch (_) { /* non-critical enhancement, skip on failure */ }
+                        }
+                    }
+
+                    // Memory layout obfuscation: canaries, register rotation, fake frames
+                    if (options.memoryLayoutObfuscation === true) {
+                        const memSeed = createSeedFromString(`mem:${integrityKey}`, 0x85ebca6b);
+                        try {
+                            injectCanaries(generator.chunk, vmProfile.registerCount - 3, memSeed, {
+                                polyEndian,
+                                canaryInterval: 8
+                            });
+                            injectRegisterRotations(generator.chunk, memSeed, {
+                                polyEndian,
+                                rotationInterval: 16,
+                                bankSize: 8,
+                                registerCount: vmProfile.registerCount
+                            });
+                            injectFakeStackFrames(generator.chunk, memSeed, {
+                                polyEndian,
+                                fakeFrameInterval: 12
+                            });
+                        } catch (_) { /* non-critical protection, skip on failure */ }
                     }
                 }
                 

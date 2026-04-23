@@ -578,6 +578,161 @@ const implOpcode = {
         }
         this.write(dest, res);
     },
+    // --- Advanced Control Flow ---
+    CFF_JUMP_TABLE: function () {
+        const cur = this.read(registers.INSTRUCTION_POINTER);
+        const indexReg = this.readByte();
+        const indexValue = this.read(indexReg);
+        const numEntries = this.readDWORD();
+        for (let i = 0; i < numEntries; i++) {
+            const caseValue = this.readDWORD();
+            const stateId = this.readDWORD();
+            if (indexValue === caseValue) {
+                this.write(indexReg, stateId);
+                return;
+            }
+        }
+        const defaultState = this.readDWORD();
+        this.write(indexReg, defaultState);
+    },
+    CFF_COMPUTED_GOTO: function () {
+        const cur = this.read(registers.INSTRUCTION_POINTER);
+        const indexReg = this.readByte();
+        const shiftReg = this.readByte();
+        const indexValue = this.read(indexReg);
+        const numEntries = this.readDWORD();
+        for (let i = 0; i < numEntries; i++) {
+            const scrambledKey = this.readDWORD();
+            const stateId = this.readDWORD();
+            if (indexValue === scrambledKey) {
+                this.write(shiftReg, stateId);
+                return;
+            }
+        }
+        const defaultState = this.readDWORD();
+        this.write(shiftReg, defaultState);
+    },
+    // --- Dynamic Code Loading ---
+    DYN_LOAD: function () {
+        const srcReg = this.readByte();
+        const keySeed = this.readDWORD();
+        const expectedLength = this.readDWORD();
+        const src = this.read(srcReg);
+        if (!src) throw new Error("DYN_LOAD: source register does not contain bytecode");
+        const encrypted = Buffer.isBuffer(src) ? src : Buffer.from(src);
+        if (encrypted.length < expectedLength) throw new Error("DYN_LOAD: bytecode length mismatch");
+        const decrypted = Buffer.alloc(expectedLength);
+        for (let i = 0; i < expectedLength; i++) {
+            let state = (keySeed ^ Math.imul(i + 1, 0x27d4eb2d)) >>> 0;
+            state = ((state << 15) | (state >>> 17)) >>> 0;
+            state = Math.imul(state ^ (state >>> 15), 0x45d9f3b) >>> 0;
+            decrypted[i] = encrypted[i] ^ (state & 0xFF);
+        }
+        if (!this._dynamicLoader) this._dynamicLoader = { buffer: null, keySeed: 0, loaded: false };
+        this._dynamicLoader.buffer = decrypted;
+        this._dynamicLoader.keySeed = keySeed;
+        this._dynamicLoader.loaded = true;
+    },
+    DYN_EXEC: function () {
+        if (!this._dynamicLoader || !this._dynamicLoader.loaded) throw new Error("DYN_EXEC: no bytecode loaded");
+        const entryOffset = this.readDWORD();
+        const bytecode = this._dynamicLoader.buffer;
+        const fork = new this.constructor(this.getProfile());
+        fork.code = bytecode;
+        fork.registers = this.captureRegisterSnapshot();
+        fork.regstack = [];
+        fork.registers[registers.INSTRUCTION_POINTER] = entryOffset;
+        fork.statefulOpcodesEnabled = this.statefulOpcodesEnabled;
+        fork.jumpTargetEncodingEnabled = this.jumpTargetEncodingEnabled;
+        fork.perInstructionEncodingEnabled = this.perInstructionEncodingEnabled;
+        fork.runtimeOpcodeState = this.runtimeOpcodeState;
+        fork.adoptMemoryProtectionState(this.memoryProtectionState);
+        fork.adoptAntiDebugState(this.antiDebugState);
+        if (this.executionMode === "async") {
+            return (async () => {
+                await fork.runAsync();
+                const resultRegisters = fork.registers;
+                for (let i = 0; i < this.registers.length && i < resultRegisters.length; i++) {
+                    this.registers[i] = resultRegisters[i];
+                }
+            })();
+        }
+        fork.run();
+        const resultRegisters = fork.registers;
+        for (let i = 0; i < this.registers.length && i < resultRegisters.length; i++) {
+            this.registers[i] = resultRegisters[i];
+        }
+    },
+    DYN_PATCH: function () {
+        const srcReg = this.readByte();
+        const patchOffset = this.readDWORD();
+        const length = this.readDWORD();
+        const src = this.read(srcReg);
+        if (!src) throw new Error("DYN_PATCH: source register does not contain bytecode");
+        const patch = Buffer.isBuffer(src) ? src : Buffer.from(src);
+        if (this.selfModifyingBytecode && this.codeBackup) {
+            for (let i = 0; i < length && patchOffset + i < this.code.length; i++) {
+                this.code[patchOffset + i] = patch[i];
+            }
+        } else {
+            this.code = Buffer.from(this.code);
+            for (let i = 0; i < length && patchOffset + i < this.code.length; i++) {
+                this.code[patchOffset + i] = patch[i];
+            }
+        }
+    },
+    // --- Memory Layout Obfuscation ---
+    MEM_SHUFFLE: function () {
+        const seed = this.readDWORD();
+        const numRegions = this.readByte();
+        for (let r = 0; r < numRegions; r++) {
+            const startReg = this.readByte();
+            const sizeReg = this.readByte();
+            const regionSize = this.read(sizeReg);
+            if (typeof regionSize !== "number" || regionSize < 2) continue;
+            const perm = Array.from({ length: regionSize }, (_, i) => i);
+            let state = (seed ^ Math.imul(r + 1, 0x9e3779b9)) >>> 0;
+            for (let i = perm.length - 1; i > 0; i--) {
+                state = Math.imul((state ^ (state >>> 15)) >>> 0, 0x2c1b3c6d) >>> 0;
+                state = (state + 0x9e3779b9 + i) >>> 0;
+                const j = state % (i + 1);
+                [perm[i], perm[j]] = [perm[j], perm[i]];
+            }
+            const saved = new Array(regionSize);
+            for (let i = 0; i < regionSize; i++) saved[i] = this.registers[startReg + i];
+            for (let i = 0; i < regionSize; i++) this.registers[startReg + perm[i]] = saved[i];
+        }
+    },
+    MEM_CANARY: function () {
+        const cur = this.read(registers.INSTRUCTION_POINTER);
+        const canaryReg = this.readByte();
+        const expectedValue = this.readDWORD();
+        const failOffset = this.readJumpTargetDWORD();
+        const actualValue = this.read(canaryReg);
+        if (!(typeof actualValue === "number" && (actualValue >>> 0) === (expectedValue >>> 0))) {
+            this.registers[registers.INSTRUCTION_POINTER] = cur + failOffset - 1;
+        }
+    },
+    REG_ROTATE: function () {
+        const seed = this.readDWORD();
+        const numBanks = this.readByte();
+        const bankSize = this.readByte();
+        for (let bank = 0; bank < numBanks; bank++) {
+            const bankStart = bank * bankSize;
+            const bankSeed = (seed ^ Math.imul(bank + 1, 0x27d4eb2d)) >>> 0;
+            const perm = Array.from({ length: bankSize }, (_, i) => i);
+            let state = bankSeed;
+            for (let i = perm.length - 1; i > 0; i--) {
+                state = Math.imul((state ^ (state >>> 15)) >>> 0, 0x2c1b3c6d) >>> 0;
+                state = (state + 0x9e3779b9 + i) >>> 0;
+                const j = state % (i + 1);
+                [perm[i], perm[j]] = [perm[j], perm[i]];
+            }
+            const saved = new Array(bankSize);
+            for (let i = 0; i < bankSize; i++) saved[i] = this.registers[bankStart + i];
+            for (let i = 0; i < bankSize; i++) this.registers[bankStart + perm[i]] = saved[i];
+        }
+    },
     NOP: function () {
     },
     END: function () {
