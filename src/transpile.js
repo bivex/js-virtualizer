@@ -697,7 +697,11 @@ function injectDeadCode(chunk, endian = "BE") {
         return;
     }
 
+    // Function already ends with END (stops execution), so just append dead code.
+    // However, append a final END so that size calculations and interleaveChunks 
+    // assumptions about the last opcode being a 1-byte END remain perfectly accurate.
     decoySequence.forEach((opcode) => chunk.append(opcode));
+    chunk.append(new Opcode("END"));
 }
 
 function getJumpEncodingOffsets(opcodeName, opcodeData, polyEndian = "BE") {
@@ -1288,6 +1292,57 @@ async function transpile(code, options) {
                 .replace("%TIME_LOCK_SETUP%", timeLockSetup)
                 .replace("%DISPATCH_OBFUSCATION_SETUP%", dispatchObfuscationSetup);
 
+            let cffInnerProgram = "";
+            if (options.nestedVM && options.controlFlowFlattening !== false) {
+                const cffOpIndex = mergedChunk.code.findIndex(op => op.name === "CFF_DISPATCH");
+                if (cffOpIndex !== -1) {
+                    const _nestedKey = deriveNestedKey(sharedConfig.integrityKey);
+                    const _innerShuffleSeed = deriveInnerShuffleSeed(sharedConfig.integrityKey);
+                    const cffOp = mergedChunk.code[cffOpIndex];
+                    const data = cffOp.data;
+                    const readU32 = polyEndian === "LE"
+                        ? (buf, off) => buf.readUInt32LE(off)
+                        : (buf, off) => buf.readUInt32BE(off);
+                    const numEntries = readU32(data, 1);
+                    const entryPairs = [];
+                    for (let i = 0; i < numEntries; i++) {
+                        const base = 5 + i * 8;
+                        entryPairs.push({
+                            entryState: readU32(data, base),
+                            entryOffset: readU32(data, base + 4)
+                        });
+                    }
+                    let cffBytePos = 0;
+                    for (let i = 0; i < cffOpIndex; i++) {
+                        cffBytePos += mergedChunk.code[i].toBytes().length;
+                    }
+                    const cur = cffBytePos + 1;
+                    const cffBuilder = compileCffDispatchInnerBytecode();
+                    const {bytecode: cffBc, patchTable: cffPt} = cffBuilder.build(entryPairs, cur, 0);
+                    const values = [0];
+                    for (const pair of entryPairs) {
+                        values.push(pair.entryState);
+                        values.push(cur + pair.entryOffset - 1);
+                    }
+                    for (const patch of cffPt) {
+                        const value = values[patch.operand];
+                        cffBc[patch.position] = (value >>> 24) & 0xFF;
+                        cffBc[patch.position + 1] = (value >>> 16) & 0xFF;
+                        cffBc[patch.position + 2] = (value >>> 8) & 0xFF;
+                        cffBc[patch.position + 3] = value & 0xFF;
+                    }
+                    if (_innerShuffleSeed !== 0) {
+                        const {remap} = shuffleInnerOpcodes(_innerShuffleSeed);
+                        const remappedBc = remapInnerBytecode(cffBc, remap);
+                        const encryptedBc = encryptInnerBytecode(remappedBc, _nestedKey);
+                        cffInnerProgram = `VM._cffInnerHex = '${encryptedBc.toString("hex")}';`;
+                    } else {
+                        const encryptedBc = encryptInnerBytecode(cffBc, _nestedKey);
+                        cffInnerProgram = `VM._cffInnerHex = '${encryptedBc.toString("hex")}';`;
+                    }
+                }
+            }
+
             // Generate per-function wrappers
             const wrapperCodes = [];
             for (let i = 0; i < ilvEntries.length; i++) {
@@ -1300,7 +1355,7 @@ async function transpile(code, options) {
                     .replace("%DEPENDENCIES%", JSON.stringify(entry._regToDep).replace(/"/g, ""))
                     .replace("%FUNCTION_ID%", i.toString())
                     .replace("%OUTPUT_REGISTER%", entry._outputRegister.toString())
-                    .replace("%CFF_INNER_PROGRAM%", "")
+                    .replace("%CFF_INNER_PROGRAM%", cffInnerProgram)
                     .replace("%RUNCMD%", entry.node.async ? "await VM.runAsync()" : "VM.run()");
                 wrapperCodes.push(wrapperCode);
             }
@@ -1324,6 +1379,15 @@ async function transpile(code, options) {
             for (let i = rewriteQueue.length - 1; i >= 0; i--) {
                 if (rewriteQueue[i]._interleaved) rewriteQueue.splice(i, 1);
             }
+
+            // Replace interleaved chunks with the mergedChunk in the chunks array
+            // This ensures obfuscateOpcodes (RemoveUnused) doesn't delete opcodes used in the merged chunk
+            for (let i = chunks.length - 1; i >= 0; i--) {
+                if (ilvEntries.some(e => e.chunk === chunks[i])) {
+                    chunks.splice(i, 1);
+                }
+            }
+            chunks.push(mergedChunk);
 
             console.log("Interleaving complete.");
             log(new LogData(`Interleaved ${ilvEntries.length} functions into one bytecode blob (${unifiedRegisterCount} regs)`, 'success', false));

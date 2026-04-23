@@ -59,11 +59,21 @@ function getOffsetPositionsInOpcode(opcode) {
     }
 }
 
-function readOffsetFromData(data, pos) {
+function readOffsetFromData(data, pos, polyEndian = "BE") {
+    if (polyEndian === "LE") {
+        return (data[pos + 3] << 24) | (data[pos + 2] << 16) | (data[pos + 1] << 8) | data[pos];
+    }
     return (data[pos] << 24) | (data[pos + 1] << 16) | (data[pos + 2] << 8) | data[pos + 3];
 }
 
-function writeOffsetToData(data, pos, value) {
+function writeOffsetToData(data, pos, value, polyEndian = "BE") {
+    if (polyEndian === "LE") {
+        data[pos + 3] = (value >> 24) & 0xFF;
+        data[pos + 2] = (value >> 16) & 0xFF;
+        data[pos + 1] = (value >> 8) & 0xFF;
+        data[pos] = value & 0xFF;
+        return data;
+    }
     data[pos] = (value >> 24) & 0xFF;
     data[pos + 1] = (value >> 16) & 0xFF;
     data[pos + 2] = (value >> 8) & 0xFF;
@@ -71,7 +81,7 @@ function writeOffsetToData(data, pos, value) {
     return data;
 }
 
-function identifyBlocks(chunk) {
+function identifyBlocks(chunk, polyEndian = "BE") {
     const opcodes = chunk.code;
     if (opcodes.length === 0) return [];
 
@@ -103,7 +113,7 @@ function identifyBlocks(chunk) {
             // cur = byteOffsets[i] + 1 (the byte after the opcode byte)
             const cur = byteOffsets[i] + 1;
             for (const pos of offsetPositions) {
-                const offset = readOffsetFromData(opcode.data, pos);
+                const offset = readOffsetFromData(opcode.data, pos, polyEndian);
                 const targetByte = cur + offset - 1;
                 const targetIdx = byteToIndex.get(targetByte);
                 if (targetIdx !== undefined) {
@@ -116,7 +126,7 @@ function identifyBlocks(chunk) {
             // TRY_CATCH_FINALLY: catch/finally offsets also use cur + offset - 1
             const cur = byteOffsets[i] + 1;
             for (const pos of offsetPositions) {
-                const offset = readOffsetFromData(opcode.data, pos);
+                const offset = readOffsetFromData(opcode.data, pos, polyEndian);
                 const targetByte = cur + offset - 1;
                 const targetIdx = byteToIndex.get(targetByte);
                 if (targetIdx !== undefined) {
@@ -177,7 +187,7 @@ function applyControlFlowFlattening(chunk, cffStateReg, options = {}) {
     const hasUnsafe = opcodes.some(op => UNSAFE_OPCODES.has(op.name));
     if (hasUnsafe) return { initialStateId: 0 };
 
-    const blocks = identifyBlocks(chunk);
+    const blocks = identifyBlocks(chunk, polyEndian);
     if (blocks.length < 3) return { initialStateId: 0 };
 
     // Compute byte offsets for original opcodes
@@ -196,9 +206,9 @@ function applyControlFlowFlattening(chunk, cffStateReg, options = {}) {
         if (offsetPositions.length > 0) {
             const cur = originalByteOffsets.get(i) + 1;
             for (const pos of offsetPositions) {
-                const offset = readOffsetFromData(opcode.data, pos);
+                const offset = readOffsetFromData(opcode.data, pos, polyEndian);
                 const targetByte = cur + offset - 1;
-                if (!blockByteOffsets.has(targetByte)) return { initialStateId: 0 };
+                if (!blockByteOffsets.has(targetByte)) { console.log("CFF FAILED AT TARGET", targetByte, "FOR OPCODE", opcode.name); return { initialStateId: 0 }; }
             }
         }
     }
@@ -236,7 +246,7 @@ function applyControlFlowFlattening(chunk, cffStateReg, options = {}) {
         const offsetPositions = getOffsetPositionsInOpcode(opcode);
         const targets = [];
         for (const pos of offsetPositions) {
-            const offset = readOffsetFromData(opcode.data, pos);
+            const offset = readOffsetFromData(opcode.data, pos, polyEndian);
             const targetByte = cur + offset - 1;
             const block = findBlockAtByteOffset(targetByte);
             if (block) targets.push({ pos, blockId: block.index, stateId: stateIds.get(block.index) });
