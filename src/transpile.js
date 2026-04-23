@@ -1342,7 +1342,7 @@ async function transpile(code, options) {
     let nestedKey = 0;
     let innerShuffleSeed = 0;
     const hasVirtualizedFunctions = virtualizeNodes.length > 0;
-    if (options.nestedVM && hasVirtualizedFunctions) {
+     if (options.nestedVM && hasVirtualizedFunctions) {
         const integrityKey = rewriteQueue.length > 0
             ? rewriteQueue[0].integrityKey
             : (ilvSharedConfig ? ilvSharedConfig.integrityKey : null);
@@ -1352,8 +1352,11 @@ async function transpile(code, options) {
         nestedKey = deriveNestedKey(integrityKey);
         innerShuffleSeed = deriveInnerShuffleSeed(integrityKey);
 
-        // Inject InnerVM class into vmAST
-        const innerVMSrc = generateInnerVMSource(_innerOpNames);
+        // Shuffle inner opcodes — reorder handlers array and remap bytecode
+        const {shuffledNames, remap} = shuffleInnerOpcodes(innerShuffleSeed);
+
+        // Inject InnerVM class into vmAST with shuffled handler order
+        const innerVMSrc = generateInnerVMSource(shuffledNames);
         const innerVMAST = acorn.parse(innerVMSrc, {ecmaVersion: "latest", sourceType: "module"});
 
         // Find JSVM class in vmAST and insert InnerVM before it
@@ -1379,8 +1382,12 @@ async function transpile(code, options) {
         // We store the builder for use during rewriteQueue processing
         innerPrograms.CFF_DISPATCH = {dynamic: true, builder: compileCffDispatchInnerBytecode()};
 
-        // Shuffle inner opcodes (skip for MVP — handlers array order must match)
-        // TODO: reorder InnerVM.handlers to match shuffled order
+        // Remap static inner bytecodes to match shuffled opcode IDs
+        for (const [name, program] of Object.entries(innerPrograms)) {
+            if (program.bytecode) {
+                program.bytecode = remapInnerBytecode(program.bytecode, remap);
+            }
+        }
 
         // Encrypt inner bytecodes
         for (const [name, program] of Object.entries(innerPrograms)) {
@@ -1388,12 +1395,6 @@ async function transpile(code, options) {
                 program.bytecode = encryptInnerBytecode(program.bytecode, nestedKey);
             }
         }
-
-        // Inject shuffled inner opcode table into InnerVM constructor
-        // (The InnerVM handlers array is already ordered by original inner opcode ID.
-        //  We need to also inject the shuffled opNames for the handlers array reordering)
-        // For MVP: the inner handlers stay in original order since they're indexed directly.
-        // The shuffle remaps the bytecode's opcode bytes, which is sufficient.
 
         // Store encrypted programs as hex strings in the InnerVM AST
         // Find InnerVM class and add programs property
@@ -1502,16 +1503,10 @@ async function transpile(code, options) {
                         var prog = InnerVM.decryptProgram(InnerVM.programs.FUNC_CALL, ${nestedKey >>> 0});
                         prog[2] = fn;
                         prog[5] = funcThis;
-                        prog[10] = args.length;
-                        for (var ai = 0; ai < args.length && ai < 8; ai++) {
-                            prog[11 + ai] = 6 + ai;
-                        }
                         this._innerVM.loadProgram(prog);
-                        for (var ai = 0; ai < args.length && ai < 8; ai++) {
-                            this._innerVM.regs[6 + ai] = this.read(args[ai]);
-                        }
                         this._innerVM.run();
-                        this.write(dst, this._innerVM.regs[3]);
+                        var result = this._innerVM.regs[0].apply(this._innerVM.regs[1], args);
+                        this.write(dst, result);
                     }`;
                     funcCallHandler.value = acorn.parse(`(${trampolineSrc})`, {ecmaVersion: "latest"}).body[0].expression;
                 }
