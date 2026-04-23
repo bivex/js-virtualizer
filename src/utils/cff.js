@@ -208,7 +208,7 @@ function applyControlFlowFlattening(chunk, cffStateReg, options = {}) {
             for (const pos of offsetPositions) {
                 const offset = readOffsetFromData(opcode.data, pos, polyEndian);
                 const targetByte = cur + offset - 1;
-                if (!blockByteOffsets.has(targetByte)) { console.log("CFF FAILED AT TARGET", targetByte, "FOR OPCODE", opcode.name); return { initialStateId: 0 }; }
+                if (!blockByteOffsets.has(targetByte)) { return { initialStateId: 0 }; }
             }
         }
     }

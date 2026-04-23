@@ -158,6 +158,9 @@ function insertOpaquePredicates(chunk, opaqueScratch, registerCount, options = {
     let bpos = 0;
     for (let i = 0; i < code.length; i++) {
         origByteOffsets.push(bpos);
+        if (code[i]._origByteOffset === undefined) {
+             code[i]._origByteOffset = bpos;
+        }
         bpos += code[i].toBytes().length;
     }
 

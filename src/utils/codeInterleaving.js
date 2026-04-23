@@ -47,7 +47,7 @@ function interleaveChunks(entries, registerCount, options = {}) {
         merged.append(new Opcode("EQ", tempReg2, selectorReg, tempReg1));
 
         const jumpEqPos = checkBase + 6 + 4;
-        const jumpEqOffset = fnStartPositions[i] - jumpEqPos; console.log("INTERLEAVE: fnStartPositions["+i+"]=", fnStartPositions[i], "adjustedFnSize=", adjustedFnSizes[i]);
+        const jumpEqOffset = fnStartPositions[i] - jumpEqPos;
         merged.append(new Opcode("JUMP_EQ", tempReg2, encodeDWORD(jumpEqOffset, endian)));
     }
     // Fallback END (unreachable if selector is valid)

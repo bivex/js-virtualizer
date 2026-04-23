@@ -893,7 +893,9 @@ async function transpile(code, options) {
                 }
             }
         });
-        const vmProfileCandidates = createVMProfileCandidates(functionBody, dependencies, node.params, options);
+        const vmProfileCandidates = sharedConfig?.sharedProfile 
+            ? [sharedConfig.sharedProfile] 
+            : createVMProfileCandidates(functionBody, dependencies, node.params, options);
         let generationResult = null;
         let lastRegisterError = null;
 
@@ -903,7 +905,11 @@ async function transpile(code, options) {
                 const cffStateRegister = options.controlFlowFlattening !== false ? vmProfile.registerCount - 1 : undefined;
                 // Build register scramble maps if polymorphic mode enabled
                 let scrambleMap = null, reverseScrambleMap = null;
-                if (options.polymorphic) {
+                if (sharedConfig?.sharedScrambleMap) {
+                    scrambleMap = sharedConfig.sharedScrambleMap;
+                    // reverse map not strictly needed for generator, but let's be safe
+                    reverseScrambleMap = null; 
+                } else if (options.polymorphic) {
                     const cffEnabled = options.controlFlowFlattening !== false;
                     const sm = buildRegisterScramble(vmProfile.registerCount, cffEnabled, integrityKey);
                     scrambleMap = sm.scrambleMap;
@@ -916,6 +922,11 @@ async function transpile(code, options) {
                     reverseScrambleMap: reverseScrambleMap,
                     endian: polyEndian
                 });
+                
+                // Reserve top 8 registers to avoid collisions with VM/Interleaver/CFF internal registers (e.g. selectorReg, tempRegs, cffState)
+                for (let r = 1; r <= 8; r++) {
+                    generator.reservedRegisters.add(vmProfile.registerCount - r);
+                }
 
                 // Reserve scratch registers for opaque predicates to avoid clobbering live registers
                 let opaqueScratch = [];
@@ -1175,6 +1186,16 @@ async function transpile(code, options) {
     let ilvSharedConfig = null;
     if (options.codeInterleaving && virtualizeNodes.length >= 2) {
         console.log(`Found ${virtualizeNodes.length} virtualized nodes. Starting interleaving...`);
+        const unifiedRegisterCount = options.vmProfile?.registerCount ?? 256;
+        const sharedScrambleMapResult = options.polymorphic ? buildRegisterScramble(unifiedRegisterCount, options.controlFlowFlattening !== false, "ilv_shared") : null;
+        
+        const sharedProfile = normalizeVMProfile({
+            registerCount: unifiedRegisterCount,
+            dispatcherVariant: options.dispatcherVariant ?? "clustered",
+            scrambleMap: sharedScrambleMapResult?.scrambleMap,
+            reverseScrambleMap: sharedScrambleMapResult?.reverseMap
+        });
+
         const sharedConfig = {
             integrityKey: crypto.randomBytes(16).toString("hex"),
             bytecodeKeyId: `JSVK_${crypto.randomBytes(6).toString("hex")}`,
@@ -1185,6 +1206,8 @@ async function transpile(code, options) {
             antiDumpKey: crypto.randomBytes(16).toString("hex"),
             timeLockKey: crypto.randomBytes(16).toString("hex"),
             dispatchObfuscationKey: crypto.randomBytes(16).toString("hex"),
+            sharedProfile,
+            sharedScrambleMap: sharedScrambleMapResult?.scrambleMap
         };
         ilvSharedConfig = sharedConfig;
 
@@ -1198,9 +1221,6 @@ async function transpile(code, options) {
             const polyEndian = options.polymorphic
                 ? (parseInt(sharedConfig.integrityKey.slice(0, 8), 16) & 1 ? "LE" : "BE")
                 : "BE";
-
-            // Use the max registerCount across all functions
-            const unifiedRegisterCount = Math.max(...ilvEntries.map(e => e.vmProfile.registerCount));
 
             // Merge chunks
             console.log("Interleaving chunks...");
@@ -1274,6 +1294,9 @@ async function transpile(code, options) {
             const dispatchObfuscationSetup = options.dispatchObfuscation !== false
                 ? `VM.enableDispatchObfuscation(__jsv_ilv_do_key);` : "";
 
+            const physicalSelectorReg = sharedConfig.sharedScrambleMap ? (sharedConfig.sharedScrambleMap.get(selectorReg) || selectorReg) : selectorReg;
+            const physicalCffStateReg = sharedConfig.sharedScrambleMap ? (sharedConfig.sharedScrambleMap.get(unifiedRegisterCount - 1) || (unifiedRegisterCount - 1)) : (unifiedRegisterCount - 1);
+
             let setupCode = interleavedSetupTemplate
                 .replace("%VM_PROFILE%", JSON.stringify(ilvProfile))
                 .replace("%BYTECODE_INTEGRITY_KEY%", sharedConfig.integrityKey)
@@ -1283,8 +1306,8 @@ async function transpile(code, options) {
                 .replace("%DISPATCH_OBFUSCATION_KEY%", sharedConfig.dispatchObfuscationKey)
                 .replace("%BYTECODE%", protectedBytecode)
                 .replace("%ENCODING%", encoding)
-                .replace("%SELECTOR_REG%", selectorReg.toString())
-                .replace("%CFF_STATE_REG%", (unifiedRegisterCount - 1).toString())
+                .replace("%SELECTOR_REG%", physicalSelectorReg.toString())
+                .replace("%CFF_STATE_REG%", physicalCffStateReg.toString())
                 .replace("%CFF_INITIAL_STATE%", cffInitState.toString())
                 .replace("%ANTI_DEBUG_KEY_SETUP%", `var __jsv_ilv_adbg_key = '${sharedConfig.antiDebugKey}';`)
                 .replace("%SELF_MODIFY_SETUP%", selfModifySetup)
@@ -1399,7 +1422,8 @@ async function transpile(code, options) {
     }
 
     if (options.passes.has("RemoveUnused")) {
-        obfuscateOpcodes(chunks, vmAST)
+        const activeChunks = chunks.filter(c => c !== null);
+        obfuscateOpcodes(activeChunks, vmAST)
     }
 
     // Nested VM: inject InnerVM and replace critical handlers with trampolines
