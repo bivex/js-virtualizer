@@ -55,21 +55,15 @@ async function main() {
     }
     virtualize()
 `, {
-    // the filename of the code; will be used as the default output filename
     fileName: 'example.js',
-    // whether or not the transpiler should directly write the output to a file
     writeOutput: true,
-    // the path to write the vm for the transpiled code to
     vmOutputPath: "./vm_output.js",
-    // the path to write the transpiled code to
     transpiledOutputPath: "./output.js",
-    // the passes apply to the result before returning
     passes: [
-      "RemoveUnused", // whether or not to remove unused opcodes from the instruction set
-      "ObfuscateVM", // whether or not to obfuscate the VM code through javascript-obfuscator
-      "ObfuscateTranspiled" // whether or not to obfuscate the transpiled code through javascript-obfuscator
+      "RemoveUnused",
+      "ObfuscateVM",
+      "ObfuscateTranspiled"
     ],
-    // optional javascript-obfuscator targets for each output kind
     vmObfuscationTarget: "node",
     transpiledObfuscationTarget: "node"
   });
@@ -79,26 +73,72 @@ async function main() {
 
 main();
 ```
+
 ### Options for `transpile`
+
+#### Output options
 
 - `fileName` (string, default: `[randomly generated]`) - the filename of the code; will be used as the default output filename where the transpiled code & the VM will be written to
 - `writeOutput` (bool, default `true`) - whether or not the transpiler should directly write the output to a file
-- `vmOutputPath` (string, default: `node_modules/js-virtualizer/output/[name].js`) - the path to write the vm for the transpiled code to
-- `transpiledOutputPath` (string, default: `node_modules/js-virtualizer/output/[name].virtualized.js`) - the path to write the transpiled code to
-- `deadCodeInjection` (bool, default `true`) - whether or not unreachable decoy bytecode should be appended to the protected payload
-- `memoryProtection` (bool, default `true`) - whether or not generated wrappers should enable protected VM register storage before execution
-- `randomizeVMProfiles` (bool, default `true`) - whether or not each virtualized function should synthesize a hardened randomized register-VM profile; the default random path now biases toward larger register files, denser decoys, and stronger dispatcher/alias strategies
-- `vmProfile` (object, default `null`) - optional explicit VM profile override; useful when you want to pin `registerCount`, dispatcher variant, alias policy, or opcode-derivation mode
-- `vmObfuscationTarget` (string, default `node`) - javascript-obfuscator target for VM output when `ObfuscateVM` is enabled
+- `vmOutputPath` (string, default: `output/[name].vm.js`) - the path to write the VM for the transpiled code to
+- `transpiledOutputPath` (string, default: `output/[name].virtualized.js`) - the path to write the transpiled code to
+- `vmObfuscationTarget` (string, default `node`) - javascript-obfuscator target for VM output when `ObfuscateVM` is enabled; use `"browser"` for browser-compatible output
 - `transpiledObfuscationTarget` (string, default `node`) - javascript-obfuscator target for transpiled output when `ObfuscateTranspiled` is enabled
-- `nestedVM` (bool, default `false`) - enables two-layer virtualization; critical opcode handlers (ADD, FUNC_CALL, CFF_DISPATCH) are re-virtualized inside a lightweight inner VM with encrypted bytecode, shuffled opcode IDs, and per-function key derivation. Works with CFF, opaque predicates, dead code injection, and browser targets. Note: `nestedVM` + `codeInterleaving` is not yet supported.
-- `passes` (array, default: `["RemoveUnused", "ObfuscateVM", "ObfuscateTranspiled"]`) - an array of passes to apply to the result before returning and writing to a file
-  - `RemoveUnused` - whether or not to remove unused opcodes from the instruction set
-  - `ObfuscateVM` - whether or not to obfuscate the VM code through javascript-obfuscator
-  - `ObfuscateTranspiled` - whether or not to obfuscate the transpiled code through javascript-obfuscator
 
-Generated virtualized wrappers now protect embedded bytecode with a per-function integrity envelope. If the protected payload is modified, the VM throws before decompression and execution.
-Generated virtualized wrappers also enable protected register storage and dead bytecode injection by default.
+#### Protection features
+
+All protection features default to `true` and are enabled simultaneously in the hardened default profile.
+
+- `deadCodeInjection` (bool, default `true`) - append unreachable decoy bytecode instruction sequences to the protected payload
+- `memoryProtection` (bool, default `true`) - enable encrypted register storage with guard tokens and per-step rotation; this is the primary performance bottleneck in the hardened profile
+- `controlFlowFlattening` (bool, default `true`) - replace direct jumps with a state-machine dispatch loop (`CFF_DISPATCH` opcode), making control flow opaque to static analysis
+- `opaquePredicates` (bool, default `true`) - insert always-true/false predicate blocks into the bytecode stream to confuse disassemblers
+- `selfModifyingBytecode` (bool, default `true`) - scramble executed bytecode bytes after each instruction; backward jumps transparently restore the original bytes
+- `antiDump` (bool, default `true`) - overwrite executed bytecode with a deterministic mask after execution, preventing memory dumps of the full payload
+- `antiDebug` (enabled in wrappers by default) - arm timing-gap and DevTools heuristics that perturb dispatcher state and optionally trigger `debugger` traps when tampering is detected
+- `timeLock` (bool, default `true`) - hashcash-style proof-of-work challenge solved at VM startup before execution begins
+- `dispatchObfuscation` (bool, default `true`) - multi-phase dispatch loop (fetch, decode, pre-exec, execute, post, dummy) with interleaved dummy phases
+- `junkInStream` (bool, default `true`) - insert junk instructions between real instructions in the bytecode stream
+- `whiteboxEncryption` (bool, default `true`) - generate white-box T-tables for an additional bytecode encryption layer
+- `polymorphic` (bool, default `true`) - randomize register scramble maps and endianness (BE/LE) per function based on the integrity key
+
+#### VM profiles
+
+- `randomizeVMProfiles` (bool, default `true`) - synthesize a hardened randomized register-VM profile per function; biased toward larger register files, denser decoys, and stronger dispatcher/alias strategies
+- `vmProfile` (object, default `null`) - explicit VM profile override. Available sub-fields:
+  - `registerCount` (number, 48–256) - number of VM registers
+  - `dispatcherVariant` (`"permuted"` | `"clustered"` | `"striped"`) - dispatch table layout strategy
+  - `aliasBaseCount` (number, 1–4) - base number of alias slots per opcode
+  - `aliasJitter` (number, 0–3) - random alias count variation
+  - `decoyCount` (number, 0–64) - number of decoy handler slots
+  - `decoyStride` (number, 1–8) - spacing between decoy entries
+  - `runtimeOpcodeDerivation` (`"hybrid"` | `"stateful"` | `"position"`) - how alias indices are selected at runtime
+  - `polyEndian` (`"BE"` | `"LE"`) - endianness for DWORD encoding
+
+#### Nested VM
+
+- `nestedVM` (bool, default `false`) - enables two-layer virtualization; critical opcode handlers (ADD, FUNC_CALL, CFF_DISPATCH) are re-virtualized inside a lightweight 16-opcode inner VM with encrypted bytecode, shuffled opcode IDs, and per-function key derivation. Works with CFF, opaque predicates, dead code injection, and browser targets. Note: `nestedVM` + `codeInterleaving` is not yet supported.
+
+#### Code interleaving
+
+- `codeInterleaving` (bool, default `false`) - merge multiple `// @virtualize` functions into a single unified bytecode blob executed by one shared VM instance. The dispatch loop uses a selector register to switch between interleaved function bodies.
+
+#### Environment lock
+
+- `environmentLock` (object, default `null`) - restrict execution to a specific environment. Example: `{type: 'hostname', expected: 'example.com'}` — the VM verifies the runtime hostname before executing.
+
+#### Preprocessing
+
+- `decoratorsMode` (`"legacy"` | `"standard"`, default `"legacy"`) - Babel decorator plugin mode; `"standard"` uses the `2023-11` proposal syntax
+
+#### Post-processing passes
+
+- `passes` (array, default: `["RemoveUnused", "ObfuscateVM", "ObfuscateTranspiled"]`) - passes applied to the result before returning:
+  - `RemoveUnused` - strip unused opcodes from the instruction set
+  - `ObfuscateVM` - obfuscate the VM code through javascript-obfuscator
+  - `ObfuscateTranspiled` - obfuscate the transpiled code through javascript-obfuscator
+
+Generated virtualized wrappers protect embedded bytecode with a per-function integrity envelope. If the protected payload is modified, the VM throws before decompression and execution.
 
 ## Support Matrix
 
@@ -141,13 +181,14 @@ Generated virtualized wrappers also enable protected register storage and dead b
 | Expressions | sequence expressions | ✅ | |
 | Expressions | template literals | ✅ | |
 | Expressions | ternaries | ✅ | |
-| Expressions | logical operators | ✅ | |
+| Expressions | logical operators (`&&`, `||`, `??`) | ✅ | includes nullish coalescing |
 | Expressions | `new` | ✅ | |
-| Expressions | unary operators | ✅ | includes `typeof` and `delete` |
+| Expressions | unary operators | ✅ | includes `typeof`, `void`, `delete` |
 | Expressions | binary operators | ✅ | |
 | Expressions | update operators | ✅ | |
-| Expressions | comparison operators | ✅ | |
-| Expressions | bitwise operators | ✅ | |
+| Expressions | comparison operators | ✅ | both strict (`===`) and loose (`==`) equality |
+| Expressions | bitwise operators | ✅ | `&`, `|`, `^`, `~`, `<<`, `>>` |
+| Expressions | spread (`...`) | ✅ | spread into arrays and objects |
 | Classes | class declarations | ✅ | implemented through desugaring |
 | Classes | class expressions | ✅ | |
 | Classes | getters / setters | ✅ | public and private |
@@ -165,17 +206,30 @@ Generated virtualized wrappers also enable protected register storage and dead b
 | Obfuscation | argument scrambling | ✅ | virtualized wrappers and internal VM callbacks load arguments through randomized aliases/order mappings |
 | Obfuscation | string encryption | ✅ | bytecode string payloads are encrypted before embedding and decoded inside the VM at load time |
 | Obfuscation | dead code injection | ✅ | transpiled bytecode gets unreachable decoy instruction tails by default |
+| Obfuscation | junk instruction insertion | ✅ | junk instructions are inserted between real instructions in the bytecode stream |
+| Obfuscation | opaque predicates | ✅ | always-true/false predicate blocks confuse disassemblers and static analysis |
 | Obfuscation | VM memory protection | ✅ | generated wrappers enable protected register storage with on-read restoration |
+| Obfuscation | register rotation (stack-lane encoding) | ✅ | protected register wrappers rotate on protected reads/writes and after each VM step to avoid stable stored values |
 | Obfuscation | dispatcher-level indirect dispatch | ✅ | VM instances resolve decoded opcodes through a shuffled dispatch table instead of direct handler lookup |
-| Obfuscation | whole-bytecode encryption with externalized runtime key | ✅ | virtualized wrappers embed only a key id; the actual bytecode decryption keys are registered in the generated VM runtime |
-| Obfuscation | stateful / position-dependent opcodes | ✅ | opcode bytes are encoded by byte position and decoded at runtime using a per-function seed derived from the integrity key |
-| Obfuscation | jump target encoding | ✅ | control-flow offsets are encoded inside protected payloads and decoded only by the VM at execution time |
+| Obfuscation | dispatcher variants | ✅ | `permuted`, `clustered`, and `striped` dispatch table layouts; randomized per function |
 | Obfuscation | decoy opcode handlers | ✅ | the shuffled dispatcher includes fake never-called handler slots in addition to the real opcode aliases |
+| Obfuscation | runtime opcode derivation | ✅ | decoded opcodes resolve through runtime-selected alias slots driven by evolving dispatcher state (`hybrid`, `stateful`, or `position` modes) |
 | Obfuscation | macro opcodes / superinstructions | ✅ | common traces such as paired literal loads and test+jump sequences are fused into synthesized macro-opcodes |
-| Obfuscation | runtime opcode derivation | ✅ | decoded opcodes resolve through runtime-selected alias slots driven by evolving dispatcher state |
-| Obfuscation | dedicated VM anti-debug layer | ✅ | VM instances can arm timing-gap and DevTools heuristics that perturb dispatcher state and optionally trigger debugger traps |
+| Obfuscation | whole-bytecode encryption with externalized runtime key | ✅ | virtualized wrappers embed only a key id; the actual bytecode decryption keys are registered in the generated VM runtime |
+| Obfuscation | white-box T-table encryption | ✅ | additional white-box cipher layer with generated T-table lookup tables |
+| Obfuscation | stateful / position-dependent opcodes | ✅ | opcode bytes are encoded by byte position and decoded at runtime using a per-function seed derived from the integrity key |
 | Obfuscation | per-instruction bytecode encoding | ✅ | protected instruction payload bytes are decoded just-in-time during VM execution using a per-function seed |
-| Obfuscation | stack-lane encoding equivalent | ✅ | protected register wrappers rotate on protected reads/writes and after each VM step to avoid stable stored values |
+| Obfuscation | jump target encoding | ✅ | control-flow offsets are encoded inside protected payloads and decoded only by the VM at execution time |
+| Obfuscation | control-flow flattening | ✅ | direct jumps replaced with a state-machine dispatch loop, making control flow opaque to static analysis |
+| Obfuscation | self-modifying bytecode | ✅ | executed bytecode bytes are scrambled after each instruction; backward jumps transparently restore original bytes |
+| Obfuscation | anti-dump | ✅ | executed bytecode is overwritten with a deterministic mask, preventing memory dumps of the full payload |
+| Obfuscation | polymorphic endianness and register scramble | ✅ | random BE/LE endianness and register index scrambling per function based on integrity key |
+| Obfuscation | dedicated VM anti-debug layer | ✅ | VM instances can arm timing-gap and DevTools heuristics that perturb dispatcher state and optionally trigger debugger traps |
+| Obfuscation | dispatch loop obfuscation | ✅ | multi-phase dispatch (fetch, decode, pre-exec, execute, post, dummy) with interleaved dummy phases |
+| Obfuscation | time-lock / proof-of-work | ✅ | hashcash-style PoW challenge solved at VM startup before execution begins |
+| Obfuscation | code interleaving | ✅ | multiple virtualized functions merged into a single unified bytecode blob with shared VM instance |
+| Obfuscation | environment lock | ✅ | restrict execution to specific hostnames or environments |
+| Obfuscation | bytecode compression | ✅ | bytecode payloads are zlib/pako compressed before embedding and decompressed at load time |
 | Nested VM | two-layer virtualization | ✅ | critical handlers (ADD, FUNC_CALL, CFF_DISPATCH) are re-virtualized inside a 16-opcode inner VM with encrypted bytecode and shuffled opcode IDs |
 | Nested VM | inner opcode shuffle | ✅ | inner VM opcode IDs are permuted per-function, preventing static analysis of the inner instruction set |
 | Nested VM | CFF dispatch through inner VM | ✅ | the control-flow flattening state machine is itself virtualized, hiding dispatch logic from reverse engineering |
@@ -195,7 +249,7 @@ js-virtualizer adds measurable overhead. The table below comes from a synthetic 
 
 **Bottleneck:** nearly all overhead in the hardened default profile comes from `memoryProtection`, not from profile randomization. Disabling `memoryProtection` brings the hardened profile back to roughly the same cost as the light VM (~244x vs ~241x).
 
-The primary driver of `memoryProtection` cost was `Object.freeze` on every descriptor allocation, which prevented V8 from sharing hidden classes across descriptor objects and blocked JIT inline-cache hits. Removing `Object.freeze` (while keeping all tamper-detection semantics intact) brought the hardened VM from ~13000x to ~2300x slowdown — a **5.3× improvement** in the hot-loop worst case.
+The primary driver of `memoryProtection` cost was `Object.freeze` on every descriptor allocation, which prevented V8 from sharing hidden classes across descriptor objects and blocked JIT inline-cache hits. Removing `Object.freeze` (while keeping all tamper-detection semantics intact) brought the hardened VM from ~13000x to ~2300x slowdown — a **5.3x improvement** in the hot-loop worst case.
 
 > [!NOTE]
 > These numbers are a worst case. A tight compute loop is the scenario most hostile to any VM. For functions that do I/O, DOM work, or infrequent business logic the relative slowdown is much smaller. Benchmark on real project code before deciding which profile to use.
