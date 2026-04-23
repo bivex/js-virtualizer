@@ -240,16 +240,18 @@ Generated virtualized wrappers protect embedded bytecode with a per-function int
 
 js-virtualizer adds measurable overhead. The table below comes from a synthetic hot-loop benchmark (`compute(50000)`, 10 calls per run, 3 runs) to give a worst-case picture.
 
-| Mode | Avg per run | Avg per call | Slowdown vs original |
-| --- | --- | --- | --- |
-| Original JS | 1.313 ms (0.001 s) | 0.131 ms (0.0001 s) | 1x |
-| Light VM | 315.986 ms (0.316 s) | 31.599 ms (0.032 s) | ~241x |
-| Hardened VM (default) | 3021.219 ms (3.021 s) | 302.122 ms (0.302 s) | ~2300x |
-| Hardened VM, `memoryProtection: false` | 320.807 ms (0.321 s) | 32.081 ms (0.032 s) | ~244x |
+| Mode | Avg per call | Slowdown vs original |
+| --- | --- | --- |
+| Original JS | 0.17 ms | 1x |
+| Light VM | 35.5 ms | ~208x |
+| Hardened VM (default) | 896 ms | ~5240x |
+| Hardened VM + nested VM | 934 ms | ~5470x |
+| Hardened VM, `memoryProtection: false` | 73 ms | ~428x |
+| Hardened VM, `memoryProtection: false` + nested VM | 136 ms | ~793x |
 
-**Bottleneck:** nearly all overhead in the hardened default profile comes from `memoryProtection`, not from profile randomization. Disabling `memoryProtection` brings the hardened profile back to roughly the same cost as the light VM (~244x vs ~241x).
+**Bottleneck:** nearly all overhead in the hardened default profile comes from `memoryProtection`, not from profile randomization or nested VM. Nested VM adds only ~4% overhead on top of the hardened profile since `memoryProtection` dominates. Disabling `memoryProtection` brings the hardened profile back to ~428x, and nested VM on top of that adds ~1.85x (still within the same order of magnitude).
 
-The primary driver of `memoryProtection` cost was `Object.freeze` on every descriptor allocation, which prevented V8 from sharing hidden classes across descriptor objects and blocked JIT inline-cache hits. Removing `Object.freeze` (while keeping all tamper-detection semantics intact) brought the hardened VM from ~13000x to ~2300x slowdown — a **5.3x improvement** in the hot-loop worst case.
+The primary driver of `memoryProtection` cost was `Object.freeze` on every descriptor allocation, which prevented V8 from sharing hidden classes across descriptor objects and blocked JIT inline-cache hits. Removing `Object.freeze` (while keeping all tamper-detection semantics intact) brought the hardened VM from ~13000x to ~5240x slowdown — a **2.5x improvement** in the hot-loop worst case.
 
 > [!NOTE]
 > These numbers are a worst case. A tight compute loop is the scenario most hostile to any VM. For functions that do I/O, DOM work, or infrequent business logic the relative slowdown is much smaller. Benchmark on real project code before deciding which profile to use.
