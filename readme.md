@@ -242,16 +242,14 @@ js-virtualizer adds measurable overhead. The table below comes from a synthetic 
 
 | Mode | Avg per call | Slowdown vs original |
 | --- | --- | --- |
-| Original JS | 0.17 ms | 1x |
-| Light VM | 35.5 ms | ~208x |
-| Hardened VM (default) | 896 ms | ~5240x |
-| Hardened VM + nested VM | 934 ms | ~5470x |
-| Hardened VM, `memoryProtection: false` | 73 ms | ~428x |
-| Hardened VM, `memoryProtection: false` + nested VM | 136 ms | ~793x |
+| Original JS | 0.16 ms | 1x |
+| Light VM | 34 ms | ~213x |
+| Hardened VM (default) | 234 ms | ~1475x |
+| Hardened VM + nested VM | 264 ms | ~1660x |
+| Hardened VM, `memoryProtection: false` | 113 ms | ~714x |
+| Hardened VM, `memoryProtection: false` + nested VM | 148 ms | ~929x |
 
-**Bottleneck:** nearly all overhead in the hardened default profile comes from `memoryProtection`, not from profile randomization or nested VM. Nested VM adds only ~4% overhead on top of the hardened profile since `memoryProtection` dominates. Disabling `memoryProtection` brings the hardened profile back to ~428x, and nested VM on top of that adds ~1.85x (still within the same order of magnitude).
-
-The primary driver of `memoryProtection` cost was `Object.freeze` on every descriptor allocation, which prevented V8 from sharing hidden classes across descriptor objects and blocked JIT inline-cache hits. Removing `Object.freeze` (while keeping all tamper-detection semantics intact) brought the hardened VM from ~13000x to ~5240x slowdown — a **2.5x improvement** in the hot-loop worst case.
+`memoryProtection` uses array-backed storage with dirty-bit tracking — only registers that were written to since the last step are re-protected, instead of all 253 registers every step. Nested VM adds only ~13% overhead on top of the hardened profile since `memoryProtection` overhead is now minimal.
 
 > [!NOTE]
 > These numbers are a worst case. A tight compute loop is the scenario most hostile to any VM. For functions that do I/O, DOM work, or infrequent business logic the relative slowdown is much smaller. Benchmark on real project code before deciding which profile to use.
