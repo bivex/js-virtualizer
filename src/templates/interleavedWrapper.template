@@ -5,5 +5,7 @@
     VM.write(__jsv_ilv_cffStateReg, __jsv_ilv_cffInitState);
     %CFF_INNER_PROGRAM%
     %RUNCMD%;
-    return VM.read(%OUTPUT_REGISTER%);
+    var res = VM.read(%OUTPUT_REGISTER%);
+    console.log('[DEBUG-ILV] Func=%FUNCTION_ID% OutReg=%OUTPUT_REGISTER% Val=' + res);
+    return res;
 }

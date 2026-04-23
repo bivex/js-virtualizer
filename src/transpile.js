@@ -1031,6 +1031,12 @@ async function transpile(code, options) {
                 }
                 let cffInitialStateId = 0;
                 if (!sharedConfig) {
+                    if (options.opaquePredicates !== false && generator.opaqueScratch) {
+                        insertOpaquePredicates(generator.chunk, generator.opaqueScratch, vmProfile.registerCount, {
+                            ...(options.opaquePredicateOptions || {}),
+                            polyEndian
+                        });
+                    }
                     if (options.controlFlowFlattening !== false) {
                         const jumpTargetSeed = JSVM.deriveJumpTargetSeed(integrityKey);
                         const cffResult = applyControlFlowFlattening(generator.chunk, vmProfile.registerCount - 1, { polyEndian, jumpTargetSeed });
@@ -1038,12 +1044,6 @@ async function transpile(code, options) {
                             generator.chunk = cffResult.chunk;
                         }
                         cffInitialStateId = cffResult.initialStateId || 0;
-                    }
-                    if (options.opaquePredicates !== false && generator.opaqueScratch) {
-                        insertOpaquePredicates(generator.chunk, generator.opaqueScratch, vmProfile.registerCount, {
-                            ...(options.opaquePredicateOptions || {}),
-                            polyEndian
-                        });
                     }
                 }
                 
@@ -1236,6 +1236,14 @@ async function transpile(code, options) {
                 if (e._opaqueScratch) allOpaqueScratch.push(...e._opaqueScratch);
             }
 
+            // Apply opaque predicates on merged chunk
+            if (options.opaquePredicates !== false && allOpaqueScratch.length > 0) {
+                insertOpaquePredicates(mergedChunk, allOpaqueScratch, unifiedRegisterCount, {
+                    ...(options.opaquePredicateOptions || {}),
+                    polyEndian
+                });
+            }
+
             // Apply CFF on merged chunk
             console.log("Applying CFF on merged chunk...");
             let cffInitState = 0;
@@ -1248,14 +1256,6 @@ async function transpile(code, options) {
                     mergedChunk.code.push(...cffResult.chunk.code);
                 }
                 cffInitState = cffResult.initialStateId || 0;
-            }
-
-            // Apply opaque predicates on merged chunk
-            if (options.opaquePredicates !== false && allOpaqueScratch.length > 0) {
-                insertOpaquePredicates(mergedChunk, allOpaqueScratch, unifiedRegisterCount, {
-                    ...(options.opaquePredicateOptions || {}),
-                    polyEndian
-                });
             }
 
             // Encode merged chunk
