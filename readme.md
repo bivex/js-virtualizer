@@ -102,6 +102,25 @@ All protection features default to `true` and are enabled simultaneously in the 
 - `whiteboxEncryption` (bool, default `true`) - generate white-box T-tables for an additional bytecode encryption layer
 - `polymorphic` (bool, default `true`) - randomize register scramble maps and endianness (BE/LE) per function based on the integrity key
 
+#### Advanced protection features
+
+These features are opt-in (default `false`) and provide additional obfuscation layers for high-value targets.
+
+- `advancedCFF` (bool, default `false`) - extends control-flow flattening with indirect jump table dispatch (`CFF_JUMP_TABLE`) and computed goto patterns (`CFF_COMPUTED_GOTO`). Switch-like patterns in the opcode stream are detected and replaced with jump tables using affine-transformed case values, making case-to-target mapping opaque to static analysis
+- `memoryLayoutObfuscation` (bool, default `false`) - injects runtime memory protection opcodes into the bytecode:
+  - **Stack canaries** (`MEM_CANARY`) - deterministic canary values placed between basic blocks that trigger a fail handler on corruption, detecting stack smashing or memory tampering
+  - **Register bank rotation** (`REG_ROTATE`) - periodic seeded permutation of register banks at runtime, preventing static memory dump analysis since register values are never in predictable locations
+  - **Memory region shuffle** (`MEM_SHUFFLE`) - runtime permutation of specified register regions
+  - **Fake stack frames** - decoy register save/restore sequences with opaque predicates injected between real operations to confuse memory analysis
+
+#### Dynamic code loading
+
+Runtime bytecode generation and execution capabilities available through the `dynamicLoader` utility module.
+
+- **DYN_LOAD** - decrypt and load bytecode from a register into an internal buffer using seeded position-dependent XOR
+- **DYN_EXEC** - execute loaded bytecode in a forked VM context (supports both sync and async execution)
+- **DYN_PATCH** - hot-patch running bytecode at a given offset, enabling runtime self-modification scenarios
+
 #### VM profiles
 
 - `randomizeVMProfiles` (bool, default `true`) - synthesize a hardened randomized register-VM profile per function; biased toward larger register files, denser decoys, and stronger dispatcher/alias strategies
@@ -230,6 +249,9 @@ Generated virtualized wrappers protect embedded bytecode with a per-function int
 | Obfuscation | code interleaving | ✅ | multiple virtualized functions merged into a single unified bytecode blob with shared VM instance |
 | Obfuscation | environment lock | ✅ | restrict execution to specific hostnames or environments |
 | Obfuscation | bytecode compression | ✅ | bytecode payloads are zlib/pako compressed before embedding and decompressed at load time |
+| Obfuscation | advanced CFF (jump tables) | ✅ | indirect jump table dispatch with affine-scrambled case values and computed goto patterns; opt-in via `advancedCFF: true` |
+| Obfuscation | memory layout obfuscation | ✅ | stack canaries, register bank rotation, memory region shuffling, and fake stack frames; opt-in via `memoryLayoutObfuscation: true` |
+| Obfuscation | dynamic code loading | ✅ | runtime bytecode decryption (`DYN_LOAD`), execution (`DYN_EXEC`), and hot-patching (`DYN_PATCH`) with seeded XOR encryption |
 | Nested VM | two-layer virtualization | ✅ | critical handlers (ADD, FUNC_CALL, CFF_DISPATCH) are re-virtualized inside a 16-opcode inner VM with encrypted bytecode and shuffled opcode IDs |
 | Nested VM | inner opcode shuffle | ✅ | inner VM opcode IDs are permuted per-function, preventing static analysis of the inner instruction set |
 | Nested VM | CFF dispatch through inner VM | ✅ | the control-flow flattening state machine is itself virtualized, hiding dispatch logic from reverse engineering |
