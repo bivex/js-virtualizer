@@ -495,6 +495,8 @@ function cloneAntiDebugState(state) {
     };
 }
 
+const PROTECTED_SENTINEL = {__jsvmProtected: true};
+
 function createMemoryProtectionState(key, numProtected) {
     const normalizedKey = String(key ?? "");
     let seed = 0x9e3779b9;
@@ -504,7 +506,11 @@ function createMemoryProtectionState(key, numProtected) {
     return {
         enabled: true,
         seed,
-        heap: new Map(),
+        heap: new Array(numProtected).fill(undefined),
+        tokens: new Uint32Array(numProtected),
+        guards: new Uint32Array(numProtected),
+        epochs: new Uint32Array(numProtected),
+        dirty: new Uint8Array(numProtected),
         nextToken: 1,
         laneEpoch: 0
     };
@@ -514,40 +520,26 @@ function createRegisterProtectionMask(seed, register) {
     return rotateLeft((seed ^ Math.imul(register + 1, 0x9e3779b1)) >>> 0, register % 29 + 3);
 }
 
-function createProtectedRegisterValue(state, register, value) {
+function protectRegisterInPlace(state, offset, register, value) {
     state.laneEpoch = (state.laneEpoch + 1) >>> 0;
     const token = state.nextToken = (state.nextToken + 1) >>> 0;
-    state.heap.set(token, value);
+    state.heap[offset] = value;
     const laneSeed = (state.seed ^ Math.imul(state.laneEpoch, 0x9e3779b1)) >>> 0;
     const maskedToken = (token ^ createRegisterProtectionMask(laneSeed, register)) >>> 0;
     const guard = rotateLeft((maskedToken ^ laneSeed ^ register) >>> 0, 11);
-    return {
-        __jsvmProtected: true,
-        token: maskedToken,
-        guard,
-        laneEpoch: state.laneEpoch
-    };
+    state.tokens[offset] = maskedToken;
+    state.guards[offset] = guard;
+    state.epochs[offset] = state.laneEpoch;
 }
 
-function restoreProtectedRegisterValue(state, register, value, options = {}) {
-    if (!value || value.__jsvmProtected !== true) {
-        return value;
-    }
-    const laneEpoch = value.laneEpoch >>> 0;
-    const laneSeed = (state.seed ^ Math.imul(laneEpoch, 0x9e3779b1)) >>> 0;
-    const expectedGuard = rotateLeft((value.token ^ laneSeed ^ register) >>> 0, 11);
-    if (value.guard !== expectedGuard) {
+function verifyAndResolveRegister(state, offset, register) {
+    const epoch = state.epochs[offset];
+    const laneSeed = (state.seed ^ Math.imul(epoch, 0x9e3779b1)) >>> 0;
+    const expectedGuard = rotateLeft((state.tokens[offset] ^ laneSeed ^ register) >>> 0, 11);
+    if (state.guards[offset] !== expectedGuard) {
         throw new Error("VM register protection check failed");
     }
-    const token = (value.token ^ createRegisterProtectionMask(laneSeed, register)) >>> 0;
-    if (!state.heap.has(token)) {
-        throw new Error("VM register protection token missing");
-    }
-    const resolvedValue = state.heap.get(token);
-    if (options.consume) {
-        state.heap.delete(token);
-    }
-    return resolvedValue;
+    return state.heap[offset];
 }
 
 function createRegisterReference(value) {
@@ -1543,13 +1535,16 @@ class JSVM {
         for (let register = registerNames.length; register < this.registers.length; register++) {
             existingValues.push({
                 register,
-                value: this.readStored(register)
+                value: this.registers[register]
             });
         }
-        this.memoryProtectionState = createMemoryProtectionState(key, this.registers.length - registerNames.length);
+        const numProtected = this.registers.length - registerNames.length;
+        this.memoryProtectionState = createMemoryProtectionState(key, numProtected);
         existingValues.forEach(({register, value}) => {
-            if (value !== null) {
-                this.registers[register] = createProtectedRegisterValue(this.memoryProtectionState, register, value);
+            if (value !== null && value !== undefined) {
+                const offset = register - registerNames.length;
+                protectRegisterInPlace(this.memoryProtectionState, offset, register, value);
+                this.registers[register] = PROTECTED_SENTINEL;
             }
         });
         return this;
@@ -1564,20 +1559,20 @@ class JSVM {
             return this;
         }
 
-        for (let register = registerNames.length; register < this.registers.length; register++) {
-            if (this.registerRefs.has(register)) {
-                continue;
-            }
+        const state = this.memoryProtectionState;
+        const dirty = state.dirty;
+        const base = registerNames.length;
 
-            const storedValue = this.registers[register];
-            if (storedValue === null) {
-                continue;
-            }
+        for (let i = 0; i < dirty.length; i++) {
+            if (!dirty[i]) continue;
+            dirty[i] = 0;
+            const register = base + i;
+            if (this.registerRefs.has(register)) continue;
 
-            const resolvedValue = restoreProtectedRegisterValue(this.memoryProtectionState, register, storedValue, {
-                consume: storedValue && storedValue.__jsvmProtected === true
-            });
-            this.registers[register] = createProtectedRegisterValue(this.memoryProtectionState, register, resolvedValue);
+            const value = state.heap[i];
+            if (value === null || value === undefined) continue;
+
+            protectRegisterInPlace(state, i, register, value);
         }
 
         return this;
@@ -1588,14 +1583,16 @@ class JSVM {
             return this.registers.slice();
         }
 
+        const state = this.memoryProtectionState;
         const snapshot = this.registers.slice();
         for (let register = registerNames.length; register < snapshot.length; register++) {
             if (this.registerRefs.has(register)) {
                 continue;
             }
 
-            const resolvedValue = this.readStored(register);
-            snapshot[register] = resolvedValue === null ? null : createProtectedRegisterValue(this.memoryProtectionState, register, resolvedValue);
+            const offset = register - registerNames.length;
+            const resolvedValue = verifyAndResolveRegister(state, offset, register);
+            snapshot[register] = resolvedValue === null ? null : resolvedValue;
         }
 
         return snapshot;
@@ -1606,17 +1603,8 @@ class JSVM {
             return this;
         }
 
-        const preserved = new Set(preservedRegisters);
-        for (let register = registerNames.length; register < snapshot.length; register++) {
-            if (preserved.has(register)) {
-                continue;
-            }
-            const storedValue = snapshot[register];
-            if (storedValue && storedValue.__jsvmProtected === true) {
-                restoreProtectedRegisterValue(this.memoryProtectionState, register, storedValue, {consume: true});
-            }
-        }
-
+        // No-op in the new model: snapshot values are plain values,
+        // not token-backed descriptors that need cleanup.
         return this;
     }
 
@@ -1624,11 +1612,12 @@ class JSVM {
         if (!this.isProtectedRegister(register)) {
             return this.registers[register]
         }
-        const resolvedValue = restoreProtectedRegisterValue(this.memoryProtectionState, register, this.registers[register], {
-            consume: true
-        });
-        this.registers[register] = createProtectedRegisterValue(this.memoryProtectionState, register, resolvedValue);
-        return resolvedValue
+        if (this.registers[register] !== PROTECTED_SENTINEL) {
+            return this.registers[register]
+        }
+        const state = this.memoryProtectionState;
+        const offset = register - registerNames.length;
+        return verifyAndResolveRegister(state, offset, register);
     }
 
     writeStored(register, value) {
@@ -1639,12 +1628,11 @@ class JSVM {
             this.registers[register] = value
             return
         }
-        if (this.registers[register] && this.registers[register].__jsvmProtected === true) {
-            restoreProtectedRegisterValue(this.memoryProtectionState, register, this.registers[register], {
-                consume: true
-            });
-        }
-        this.registers[register] = createProtectedRegisterValue(this.memoryProtectionState, register, value)
+        const state = this.memoryProtectionState;
+        const offset = register - registerNames.length;
+        protectRegisterInPlace(state, offset, register, value);
+        this.registers[register] = PROTECTED_SENTINEL;
+        state.dirty[offset] = 1;
     }
 
     clearStoredRegister(register) {
@@ -1653,13 +1641,13 @@ class JSVM {
             return this
         }
 
-        const storedValue = this.registers[register]
-        if (storedValue && storedValue.__jsvmProtected === true) {
-            restoreProtectedRegisterValue(this.memoryProtectionState, register, storedValue, {
-                consume: true
-            })
-        }
-
+        const state = this.memoryProtectionState;
+        const offset = register - registerNames.length;
+        state.heap[offset] = undefined;
+        state.tokens[offset] = 0;
+        state.guards[offset] = 0;
+        state.epochs[offset] = 0;
+        state.dirty[offset] = 0;
         this.registers[register] = null
         return this
     }
