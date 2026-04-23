@@ -91,6 +91,7 @@ main();
 - `vmProfile` (object, default `null`) - optional explicit VM profile override; useful when you want to pin `registerCount`, dispatcher variant, alias policy, or opcode-derivation mode
 - `vmObfuscationTarget` (string, default `node`) - javascript-obfuscator target for VM output when `ObfuscateVM` is enabled
 - `transpiledObfuscationTarget` (string, default `node`) - javascript-obfuscator target for transpiled output when `ObfuscateTranspiled` is enabled
+- `nestedVM` (bool, default `false`) - enables two-layer virtualization; critical opcode handlers (ADD, FUNC_CALL, CFF_DISPATCH) are re-virtualized inside a lightweight inner VM with encrypted bytecode, shuffled opcode IDs, and per-function key derivation. Works with CFF, opaque predicates, dead code injection, and browser targets. Note: `nestedVM` + `codeInterleaving` is not yet supported.
 - `passes` (array, default: `["RemoveUnused", "ObfuscateVM", "ObfuscateTranspiled"]`) - an array of passes to apply to the result before returning and writing to a file
   - `RemoveUnused` - whether or not to remove unused opcodes from the instruction set
   - `ObfuscateVM` - whether or not to obfuscate the VM code through javascript-obfuscator
@@ -175,6 +176,10 @@ Generated virtualized wrappers also enable protected register storage and dead b
 | Obfuscation | dedicated VM anti-debug layer | ✅ | VM instances can arm timing-gap and DevTools heuristics that perturb dispatcher state and optionally trigger debugger traps |
 | Obfuscation | per-instruction bytecode encoding | ✅ | protected instruction payload bytes are decoded just-in-time during VM execution using a per-function seed |
 | Obfuscation | stack-lane encoding equivalent | ✅ | protected register wrappers rotate on protected reads/writes and after each VM step to avoid stable stored values |
+| Nested VM | two-layer virtualization | ✅ | critical handlers (ADD, FUNC_CALL, CFF_DISPATCH) are re-virtualized inside a 16-opcode inner VM with encrypted bytecode and shuffled opcode IDs |
+| Nested VM | inner opcode shuffle | ✅ | inner VM opcode IDs are permuted per-function, preventing static analysis of the inner instruction set |
+| Nested VM | CFF dispatch through inner VM | ✅ | the control-flow flattening state machine is itself virtualized, hiding dispatch logic from reverse engineering |
+| Nested VM | browser support | ✅ | nested VM works in browser environments (Node.js and browser targets) |
 | Runtime | automatic top-level initializer virtualization | ✅ | safe top-level variable initializers are auto-wrapped into helper VMs without requiring `// @virtualize` markers |
 
 ## Performance
