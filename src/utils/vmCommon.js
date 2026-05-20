@@ -750,9 +750,7 @@ const implOpcode = {
     },
     SET_REF: function () {
         const dest = this.readByte(), src = this.readByte();
-        const val = this.read(src);
-        console.log(`[SET_REF] dest=${dest} src=${src} val=${val}`);
-        this.write(dest, val);
+        this.write(dest, this.read(src));
     },
     WRITE_EXT: function () {
         const dest = this.readByte(), src = this.readByte();

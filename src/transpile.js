@@ -771,6 +771,8 @@ function applyPerInstructionEncoding(chunk, seed) {
 }
 
 async function transpile(code, options) {
+    let nestedKey = 0;
+    let innerShuffleSeed = 0;
     options = options ?? {};
     options.decoratorsMode = options.decoratorsMode ?? "legacy";
     options.deadCodeInjection = options.deadCodeInjection ?? true;
@@ -1213,6 +1215,7 @@ async function transpile(code, options) {
         },
     });
 
+    let ilvFinalContext = null;
     // Code Interleaving: merge multiple functions into one bytecode blob
     let ilvSharedConfig = null;
     if (options.codeInterleaving && virtualizeNodes.length >= 2) {
@@ -1255,10 +1258,14 @@ async function transpile(code, options) {
 
             // Merge chunks
             console.log("Interleaving chunks...");
+            const resolveRegister = (r) => sharedConfig.sharedScrambleMap ? (sharedConfig.sharedScrambleMap.get(r) || r) : r;
             const {mergedChunk, selectorReg} = interleaveChunks(
                 ilvEntries.map(e => ({chunk: e.chunk})),
                 unifiedRegisterCount,
-                {polyEndian}
+                {
+                    polyEndian,
+                    resolveRegister
+                }
             );
 
             // Collect opaque scratch from all functions
@@ -1278,9 +1285,12 @@ async function transpile(code, options) {
             // Apply CFF on merged chunk
             console.log("Applying CFF on merged chunk...");
             let cffInitState = 0;
+            const logicalCffStateReg = unifiedRegisterCount - 1;
+            const physicalCffStateReg = sharedConfig.sharedScrambleMap ? (sharedConfig.sharedScrambleMap.get(logicalCffStateReg) || logicalCffStateReg) : logicalCffStateReg;
+
             if (options.controlFlowFlattening !== false) {
                 const jumpTargetSeed = JSVM.deriveJumpTargetSeed(sharedConfig.integrityKey);
-                const cffResult = applyControlFlowFlattening(mergedChunk, unifiedRegisterCount - 1, { polyEndian, jumpTargetSeed });
+                const cffResult = applyControlFlowFlattening(mergedChunk, physicalCffStateReg, { polyEndian, jumpTargetSeed });
                 if (cffResult.chunk) {
                     // replace merged chunk code
                     mergedChunk.code.length = 0;
@@ -1289,145 +1299,77 @@ async function transpile(code, options) {
                 cffInitState = cffResult.initialStateId || 0;
             }
 
-            // Encode merged chunk
-            console.log("Encoding merged chunk...");
-            const opcodeSeed = JSVM.deriveOpcodeStateSeed(sharedConfig.integrityKey);
-            const jumpSeed = JSVM.deriveJumpTargetSeed(sharedConfig.integrityKey);
-            const instructionSeed = JSVM.deriveInstructionByteSeed(sharedConfig.integrityKey);
-            applyStatefulOpcodeEncoding(mergedChunk, opcodeSeed);
-            applyJumpTargetEncoding(mergedChunk, jumpSeed, polyEndian);
-            applyPerInstructionEncoding(mergedChunk, instructionSeed);
-
-            const mergedBytecode = zlib.deflateSync(Buffer.from(mergedChunk.toBytes())).toString(encoding);
-            const integritySalt = crypto.randomBytes(8).toString("hex");
-            const whiteboxTables = options.whiteboxEncryption ? generateTTables(sharedConfig.bytecodeEncryptionKey) : null;
-            const flags = whiteboxTables ? "IJSW" : "IJS";
-            const protectedBytecode = JSVM.createEncryptedBytecodeEnvelope(
-                mergedBytecode, encoding, sharedConfig.integrityKey,
-                sharedConfig.bytecodeKeyId, sharedConfig.bytecodeEncryptionKey,
-                integritySalt, flags, whiteboxTables
-            );
-
-            // Build unified VM profile
-            const ilvProfile = {
-                ...ilvEntries[0].vmProfile,
-                registerCount: unifiedRegisterCount,
-                polyEndian,
-            };
-
-            // Generate shared setup code
-            const selfModifySetup = options.selfModifyingBytecode !== false
-                ? `VM.enableSelfModifyingBytecode(__jsv_ilv_sm_key);` : "";
-            const antiDumpSetup = options.antiDump !== false
-                ? `VM.enableAntiDump(__jsv_ilv_ad_key);` : "";
-            const timeLockSetup = options.timeLock
-                ? `VM.enableTimeLock(__jsv_ilv_tl_key);` : "";
-            const dispatchObfuscationSetup = options.dispatchObfuscation !== false
-                ? `VM.enableDispatchObfuscation(__jsv_ilv_do_key);` : "";
-
-            const physicalSelectorReg = sharedConfig.sharedScrambleMap ? (sharedConfig.sharedScrambleMap.get(selectorReg) || selectorReg) : selectorReg;
-            const physicalCffStateReg = sharedConfig.sharedScrambleMap ? (sharedConfig.sharedScrambleMap.get(unifiedRegisterCount - 1) || (unifiedRegisterCount - 1)) : (unifiedRegisterCount - 1);
-
-            let setupCode = interleavedSetupTemplate
-                .replace("%VM_PROFILE%", JSON.stringify(ilvProfile))
-                .replace("%BYTECODE_INTEGRITY_KEY%", sharedConfig.integrityKey)
-                .replace("%SELF_MODIFY_KEY%", sharedConfig.selfModifyKey)
-                .replace("%ANTI_DUMP_KEY%", sharedConfig.antiDumpKey)
-                .replace("%TIME_LOCK_KEY%", sharedConfig.timeLockKey)
-                .replace("%DISPATCH_OBFUSCATION_KEY%", sharedConfig.dispatchObfuscationKey)
-                .replace("%BYTECODE%", protectedBytecode)
-                .replace("%ENCODING%", encoding)
-                .replace("%SELECTOR_REG%", physicalSelectorReg.toString())
-                .replace("%CFF_STATE_REG%", physicalCffStateReg.toString())
-                .replace("%CFF_INITIAL_STATE%", cffInitState.toString())
-                .replace("%ANTI_DEBUG_KEY_SETUP%", `var __jsv_ilv_adbg_key = '${sharedConfig.antiDebugKey}';`)
-                .replace("%SELF_MODIFY_SETUP%", selfModifySetup)
-                .replace("%ANTI_DUMP_SETUP%", antiDumpSetup)
-                .replace("%TIME_LOCK_SETUP%", timeLockSetup)
-                .replace("%DISPATCH_OBFUSCATION_SETUP%", dispatchObfuscationSetup);
-
             let cffInnerProgram = "";
             if (options.nestedVM && options.controlFlowFlattening !== false) {
                 const cffOpIndex = mergedChunk.code.findIndex(op => op.name === "CFF_DISPATCH");
                 if (cffOpIndex !== -1) {
-                    const _nestedKey = deriveNestedKey(sharedConfig.integrityKey);
-                    const _innerShuffleSeed = deriveInnerShuffleSeed(sharedConfig.integrityKey);
                     const cffOp = mergedChunk.code[cffOpIndex];
                     const data = cffOp.data;
                     const readU32 = polyEndian === "LE"
                         ? (buf, off) => buf.readUInt32LE(off)
                         : (buf, off) => buf.readUInt32BE(off);
-                    const numEntries = readU32(data, 1);
-                    const entryPairs = [];
-                    for (let i = 0; i < numEntries; i++) {
-                        const base = 5 + i * 8;
-                        entryPairs.push({
-                            entryState: readU32(data, base),
-                            entryOffset: readU32(data, base + 4)
-                        });
-                    }
-                    let cffBytePos = 0;
-                    for (let i = 0; i < cffOpIndex; i++) {
-                        cffBytePos += mergedChunk.code[i].toBytes().length;
-                    }
-                    const cur = cffBytePos + 1;
-                    const cffBuilder = compileCffDispatchInnerBytecode();
-                    const {bytecode: cffBc, patchTable: cffPt} = cffBuilder.build(entryPairs, cur, 0);
-                    const values = [0];
-                    for (const pair of entryPairs) {
-                        values.push(pair.entryState);
-                        values.push(cur + pair.entryOffset - 1);
-                    }
-                    for (const patch of cffPt) {
-                        const value = values[patch.operand];
-                        cffBc[patch.position] = (value >>> 24) & 0xFF;
-                        cffBc[patch.position + 1] = (value >>> 16) & 0xFF;
-                        cffBc[patch.position + 2] = (value >>> 8) & 0xFF;
-                        cffBc[patch.position + 3] = value & 0xFF;
-                    }
-                    if (_innerShuffleSeed !== 0) {
-                        const {remap} = shuffleInnerOpcodes(_innerShuffleSeed);
-                        const remappedBc = remapInnerBytecode(cffBc, remap);
-                        const encryptedBc = encryptInnerBytecode(remappedBc, _nestedKey);
-                        cffInnerProgram = `VM._cffInnerHex = '${encryptedBc.toString("hex")}';`;
-                    } else {
-                        const encryptedBc = encryptInnerBytecode(cffBc, _nestedKey);
-                        cffInnerProgram = `VM._cffInnerHex = '${encryptedBc.toString("hex")}';`;
+                    
+                    if (data.length >= 5) {
+                        const numEntries = readU32(data, 1);
+                        const entryPairs = [];
+                        for (let i = 0; i < numEntries; i++) {
+                            const base = 5 + i * 8;
+                            if (base + 4 <= data.length) {
+                                entryPairs.push({
+                                    entryState: readU32(data, base),
+                                    entryOffset: readU32(data, base + 4)
+                                });
+                            }
+                        }
+                        let cffBytePos = 0;
+                        for (let i = 0; i < cffOpIndex; i++) {
+                            cffBytePos += mergedChunk.code[i].toBytes().length;
+                        }
+                        const cur = cffBytePos + 1;
+                        const cffBuilder = compileCffDispatchInnerBytecode();
+                        const {bytecode: cffBc, patchTable: cffPt} = cffBuilder.build(entryPairs, cur, 0);
+                        const values = [0];
+                        for (const pair of entryPairs) {
+                            values.push(pair.entryState);
+                            values.push(cur + pair.entryOffset - 1);
+                        }
+                        for (const patch of cffPt) {
+                            const value = values[patch.operand];
+                            cffBc[patch.position] = (value >>> 24) & 0xFF;
+                            cffBc[patch.position + 1] = (value >>> 16) & 0xFF;
+                            cffBc[patch.position + 2] = (value >>> 8) & 0xFF;
+                            cffBc[patch.position + 3] = value & 0xFF;
+                        }
+                        const _nestedKey = deriveNestedKey(sharedConfig.integrityKey);
+                        const _innerShuffleSeed = deriveInnerShuffleSeed(sharedConfig.integrityKey);
+                        nestedKey = _nestedKey;
+                        innerShuffleSeed = _innerShuffleSeed;
+
+                        if (_innerShuffleSeed !== 0) {
+                            const {remap} = shuffleInnerOpcodes(_innerShuffleSeed);
+                            const remappedBc = remapInnerBytecode(cffBc, remap);
+                            const encryptedBc = encryptInnerBytecode(remappedBc, _nestedKey);
+                            cffInnerProgram = `VM._cffInnerHex = '${encryptedBc.toString("hex")}';`;
+                        } else {
+                            const encryptedBc = encryptInnerBytecode(cffBc, _nestedKey);
+                            cffInnerProgram = `VM._cffInnerHex = '${encryptedBc.toString("hex")}';`;
+                        }
                     }
                 }
             }
 
-            // Generate per-function wrappers
-            const wrapperCodes = [];
-            for (let i = 0; i < ilvEntries.length; i++) {
-                const entry = ilvEntries[i];
-                const wrapperCode = interleavedWrapperTemplate
-                    .replace("%FN_PREFIX%", entry.node.async ? "async " : "")
-                    .replace("%FUNCTION_NAME%", entry.node.id.name)
-                    .replace("%ARGS%", entry._params.join(","))
-                    .replace("%ARG_SCRAMBLE_SETUP%", entry._aliasSetup)
-                    .replace("%DEPENDENCIES%", JSON.stringify(entry._regToDep).replace(/"/g, ""))
-                    .replace("%FUNCTION_ID%", i.toString())
-                    .replace("%OUTPUT_REGISTER%", entry._outputRegister.toString())
-                    .replace("%CFF_INNER_PROGRAM%", cffInnerProgram)
-                    .replace("%RUNCMD%", entry.node.async ? "await VM.runAsync()" : "VM.run()");
-                wrapperCodes.push(wrapperCode);
-            }
-
-            // Patch AST nodes with wrapper bodies
-            for (let i = 0; i < ilvEntries.length; i++) {
-                const entry = ilvEntries[i];
-                const fullWrapper = wrapperCodes[i];
-                entry.node.body.body = acorn.parse(fullWrapper, {ecmaVersion: "latest", sourceType: "module"}).body[0].body.body;
-            }
-
-            // Register keys in VM output
-            const keyReg = `JSVM.registerBytecodeKey('${sharedConfig.bytecodeKeyId}', '${sharedConfig.bytecodeEncryptionKey}');`;
-            const wbReg = whiteboxTables ? `JSVM.setWhiteboxTables('${sharedConfig.bytecodeKeyId}', ${JSON.stringify(whiteboxTables)});` : "";
-
-            // Inject setup code into transpiled output (will be added later)
-            rewriteQueue._interleavedSetup = setupCode;
-            rewriteQueue._interleavedKeyRegistrations = [keyReg, wbReg].filter(Boolean).join("\n");
+            // Store context for finalization after obfuscateOpcodes
+            ilvFinalContext = {
+                mergedChunk,
+                ilvEntries,
+                polyEndian,
+                unifiedRegisterCount,
+                physicalCffStateReg,
+                cffInitState,
+                cffInnerProgram,
+                sharedConfig,
+                selectorReg
+            };
 
             // Remove interleaved entries from rewriteQueue (they're already processed)
             for (let i = rewriteQueue.length - 1; i >= 0; i--) {
@@ -1457,9 +1399,104 @@ async function transpile(code, options) {
         obfuscateOpcodes(activeChunks, vmAST)
     }
 
+    // Finalize interleaved code if active
+    if (ilvFinalContext) {
+        const {
+            mergedChunk, ilvEntries, polyEndian, unifiedRegisterCount,
+            physicalCffStateReg, cffInitState, cffInnerProgram, sharedConfig,
+            selectorReg
+        } = ilvFinalContext;
+
+        console.log("Finalizing interleaved chunk (encoding + serialization)...");
+        const opcodeSeed = JSVM.deriveOpcodeStateSeed(sharedConfig.integrityKey);
+        const jumpSeed = JSVM.deriveJumpTargetSeed(sharedConfig.integrityKey);
+        const instructionSeed = JSVM.deriveInstructionByteSeed(sharedConfig.integrityKey);
+
+        applyStatefulOpcodeEncoding(mergedChunk, opcodeSeed);
+        applyJumpTargetEncoding(mergedChunk, jumpSeed, polyEndian);
+        applyPerInstructionEncoding(mergedChunk, instructionSeed);
+
+        const mergedBytecode = zlib.deflateSync(Buffer.from(mergedChunk.toBytes())).toString(encoding);
+        const integritySalt = crypto.randomBytes(8).toString("hex");
+        const whiteboxTables = options.whiteboxEncryption ? generateTTables(sharedConfig.bytecodeEncryptionKey) : null;
+        const flags = whiteboxTables ? "IJSW" : "IJS";
+        const protectedBytecode = JSVM.createEncryptedBytecodeEnvelope(
+            mergedBytecode, encoding, sharedConfig.integrityKey,
+            sharedConfig.bytecodeKeyId, sharedConfig.bytecodeEncryptionKey,
+            integritySalt, flags, whiteboxTables
+        );
+
+        // Build unified VM profile
+        const ilvProfile = {
+            ...ilvEntries[0].vmProfile,
+            registerCount: unifiedRegisterCount,
+            polyEndian,
+        };
+
+        // Generate shared setup code
+        const selfModifySetup = options.selfModifyingBytecode !== false
+            ? `VM.enableSelfModifyingBytecode(__jsv_ilv_sm_key);` : "";
+        const antiDumpSetup = options.antiDump !== false
+            ? `VM.enableAntiDump(__jsv_ilv_ad_key);` : "";
+        const timeLockSetup = options.timeLock
+            ? `VM.enableTimeLock(__jsv_ilv_tl_key);` : "";
+        const dispatchObfuscationSetup = options.dispatchObfuscation !== false
+            ? `VM.enableDispatchObfuscation(__jsv_ilv_do_key);` : "";
+
+        const physicalSelectorReg = selectorReg;
+
+        let setupCode = interleavedSetupTemplate
+            .replace("%VM_PROFILE%", JSON.stringify(ilvProfile))
+            .replace("%BYTECODE_INTEGRITY_KEY%", sharedConfig.integrityKey)
+            .replace("%SELF_MODIFY_KEY%", sharedConfig.selfModifyKey)
+            .replace("%ANTI_DUMP_KEY%", sharedConfig.antiDumpKey)
+            .replace("%TIME_LOCK_KEY%", sharedConfig.timeLockKey)
+            .replace("%DISPATCH_OBFUSCATION_KEY%", sharedConfig.dispatchObfuscationKey)
+            .replace("%BYTECODE%", protectedBytecode)
+            .replace("%ENCODING%", encoding)
+            .replace("%SELECTOR_REG%", physicalSelectorReg.toString())
+            .replace("%CFF_STATE_REG%", physicalCffStateReg.toString())
+            .replace("%CFF_INITIAL_STATE%", cffInitState.toString())
+            .replace("%ANTI_DEBUG_KEY_SETUP%", `var __jsv_ilv_adbg_key = '${sharedConfig.antiDebugKey}';`)
+            .replace("%SELF_MODIFY_SETUP%", selfModifySetup)
+            .replace("%ANTI_DUMP_SETUP%", antiDumpSetup)
+            .replace("%TIME_LOCK_SETUP%", timeLockSetup)
+            .replace("%DISPATCH_OBFUSCATION_SETUP%", dispatchObfuscationSetup);
+
+        // Generate per-function wrappers
+        const wrapperCodes = [];
+        for (let i = 0; i < ilvEntries.length; i++) {
+            const entry = ilvEntries[i];
+            const wrapperCode = interleavedWrapperTemplate
+                .replace("%FN_PREFIX%", entry.node.async ? "async " : "")
+                .replace("%FUNCTION_NAME%", entry.node.id.name)
+                .replace("%ARGS%", entry._params.join(","))
+                .replace("%ARG_SCRAMBLE_SETUP%", entry._aliasSetup)
+                .replace("%DEPENDENCIES%", JSON.stringify(entry._regToDep).replace(/"/g, ""))
+                .replace(/%FUNCTION_ID%/g, i.toString())
+                .replace(/%OUTPUT_REGISTER%/g, entry._outputRegister.toString())
+                .replace("%CFF_INNER_PROGRAM%", cffInnerProgram)
+                .replace("%RUNCMD%", entry.node.async ? "await VM.runAsync()" : "VM.run()");
+            wrapperCodes.push(wrapperCode);
+        }
+
+        // Patch AST nodes with wrapper bodies
+        for (let i = 0; i < ilvEntries.length; i++) {
+            const entry = ilvEntries[i];
+            const fullWrapper = wrapperCodes[i];
+            entry.node.body.body = acorn.parse(fullWrapper, {ecmaVersion: "latest", sourceType: "module"}).body[0].body.body;
+        }
+
+        // Register keys in VM output
+        const keyReg = `JSVM.registerBytecodeKey('${sharedConfig.bytecodeKeyId}', '${sharedConfig.bytecodeEncryptionKey}');`;
+        const wbReg = whiteboxTables ? `JSVM.setWhiteboxTables('${sharedConfig.bytecodeKeyId}', ${JSON.stringify(whiteboxTables)});` : "";
+
+        // Inject setup code into transpiled output
+        rewriteQueue._interleavedSetup = setupCode;
+        rewriteQueue._interleavedKeyRegistrations = [keyReg, wbReg].filter(Boolean).join("\n");
+    }
+
     // Nested VM: inject InnerVM and replace critical handlers with trampolines
-    let nestedKey = 0;
-    let innerShuffleSeed = 0;
     const hasVirtualizedFunctions = virtualizeNodes.length > 0;
      if (options.nestedVM && hasVirtualizedFunctions) {
         const integrityKey = rewriteQueue.length > 0

@@ -13,9 +13,11 @@ const SELECTOR_CHECK_SIZE = 6 + 4 + 6; // LOAD_DWORD + EQ + JUMP_EQ
 
 function interleaveChunks(entries, registerCount, options = {}) {
     const endian = options.polyEndian ?? "BE";
-    const selectorReg = registerCount - 2;
-    const tempReg1 = registerCount - 3;
-    const tempReg2 = registerCount - 4;
+    const resolveRegister = options.resolveRegister || (r => r);
+
+    const selectorReg = resolveRegister(registerCount - 2);
+    const tempReg1 = resolveRegister(registerCount - 3);
+    const tempReg2 = resolveRegister(registerCount - 4);
     const N = entries.length;
 
     if (N < 2) throw new Error("interleaveChunks requires at least 2 entries");
