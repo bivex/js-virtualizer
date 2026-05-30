@@ -923,6 +923,14 @@ const implOpcode = {
         const cur = this.read(registers.INSTRUCTION_POINTER);
         const errorRegister = this.readByte();
         const catchOffset = this.readJumpTargetDWORD(), finallyOffset = this.readJumpTargetDWORD();
+        const savedResult = this._tl_opcodeResult;
+        const savedHandler = this._tl_handler;
+        const savedOpcodeState = this.runtimeOpcodeState;
+        const cleanup = () => {
+            this._tl_opcodeResult = savedResult;
+            this._tl_handler = savedHandler;
+            this.runtimeOpcodeState = savedOpcodeState;
+        };
         if (this.executionMode === "async") {
             return (async () => {
                 try {
@@ -934,6 +942,7 @@ const implOpcode = {
                 } finally {
                     this.registers[registers.INSTRUCTION_POINTER] = cur + finallyOffset - 1
                     await this.runAsync();
+                    cleanup();
                 }
             })();
         }
@@ -946,6 +955,7 @@ const implOpcode = {
         } finally {
             this.registers[registers.INSTRUCTION_POINTER] = cur + finallyOffset - 1
             this.run();
+            cleanup();
         }
     }, THROW: function () {
         const errRegister = this.readByte();
@@ -1718,15 +1728,13 @@ class JSVM {
             return this.registers.slice();
         }
 
-        const state = this.memoryProtectionState;
         const snapshot = this.registers.slice();
         for (let register = registerNames.length; register < snapshot.length; register++) {
             if (this.registerRefs.has(register)) {
                 continue;
             }
 
-            const offset = register - registerNames.length;
-            const resolvedValue = verifyAndResolveRegister(state, offset, register);
+            const resolvedValue = this.readStored(register);
             snapshot[register] = resolvedValue === null ? null : resolvedValue;
         }
 

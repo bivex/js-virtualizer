@@ -612,7 +612,7 @@ class JSVM {
             }
 
             const resolvedValue = this.readStored(register)
-            snapshot[register] = resolvedValue === null ? null : createProtectedRegisterValue(this.memoryProtectionState, register, resolvedValue)
+            snapshot[register] = resolvedValue === null ? null : resolvedValue
         }
 
         return snapshot

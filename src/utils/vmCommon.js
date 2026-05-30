@@ -484,7 +484,13 @@ const implOpcode = {
     FUNC_ARRAY_CALL: function () {
         const fn = this.readByte(), dst = this.readByte(), funcThis = this.readByte(), argsReg = this.readByte();
         const args = this.read(argsReg);
-        const res = this.read(fn).apply(this.read(funcThis), args);
+        const callee = this.read(fn);
+        const targetThis = this.read(funcThis);
+        if (typeof callee !== "function") {
+            console.log(`[JSVM] FUNC_ARRAY_CALL ERROR: callee is not a function! Type: ${typeof callee}, Value: ${callee}, Register: ${fn}`);
+            console.log(`[JSVM] Registers around ${fn}:`, this.registers.slice(Math.max(0, fn - 5), fn + 5));
+        }
+        const res = callee.apply(targetThis, args);
         this.write(dst, res);
     },
     FUNC_ARRAY_CALL_AWAIT: async function () {
@@ -532,7 +538,7 @@ const implOpcode = {
         function runSync(thisArg, args) {
             const fork = new vm.constructor(vm.getProfile());
             fork.setBytecodeIntegrityKey(vm.bytecodeIntegrityKey);
-            fork.code = vm.selfModifyingBytecode ? toUint8Array(vm.code) : vm.code;
+            fork.code = (vm.selfModifyingBytecode || vm.antiDump) ? new Uint8Array(vm.code) : vm.code;
             fork.registers = vm.captureRegisterSnapshot();
             fork.regstack = [];
             fork.registerRefs = new Map(vm.registerRefs);
@@ -545,6 +551,10 @@ const implOpcode = {
             fork.selfModifyingBytecode = vm.selfModifyingBytecode;
             fork.codeBackup = vm.codeBackup;
             fork.selfModifySeed = vm.selfModifySeed;
+            fork.antiDump = vm.antiDump;
+            fork.antiDumpSeed = vm.antiDumpSeed;
+            fork.antiDumpBackup = vm.antiDumpBackup;
+            fork.antiDumpHighWaterMark = 0;
             bindCaptureReferences(fork);
             const restIndex = argOrder.length - 1;
             if (hasDynamicThis) {
@@ -564,6 +574,9 @@ const implOpcode = {
             fork.registers[registers.INSTRUCTION_POINTER] = cur + fnOffset - 1;
             if (vm.selfModifyingBytecode && vm.codeBackup) {
                 fork.restoreBytecodeRange(0, fork.code.length);
+            }
+            if (vm.antiDump && vm.antiDumpBackup) {
+                fork.restoreAntiDumpBytecodeRange(0, fork.code.length);
             }
             fork.run()
             const res = fork.read(returnDataStore);
@@ -573,7 +586,7 @@ const implOpcode = {
         async function runAsync(thisArg, args) {
             const fork = new vm.constructor(vm.getProfile());
             fork.setBytecodeIntegrityKey(vm.bytecodeIntegrityKey);
-            fork.code = vm.selfModifyingBytecode ? toUint8Array(vm.code) : vm.code;
+            fork.code = (vm.selfModifyingBytecode || vm.antiDump) ? new Uint8Array(vm.code) : vm.code;
             fork.registers = vm.captureRegisterSnapshot();
             fork.regstack = [];
             fork.registerRefs = new Map(vm.registerRefs);
@@ -586,6 +599,10 @@ const implOpcode = {
             fork.selfModifyingBytecode = vm.selfModifyingBytecode;
             fork.codeBackup = vm.codeBackup;
             fork.selfModifySeed = vm.selfModifySeed;
+            fork.antiDump = vm.antiDump;
+            fork.antiDumpSeed = vm.antiDumpSeed;
+            fork.antiDumpBackup = vm.antiDumpBackup;
+            fork.antiDumpHighWaterMark = 0;
             bindCaptureReferences(fork);
             const restIndex = argOrder.length - 1;
             if (hasDynamicThis) {
@@ -605,6 +622,9 @@ const implOpcode = {
             fork.registers[registers.INSTRUCTION_POINTER] = cur + fnOffset - 1;
             if (vm.selfModifyingBytecode && vm.codeBackup) {
                 fork.restoreBytecodeRange(0, fork.code.length);
+            }
+            if (vm.antiDump && vm.antiDumpBackup) {
+                fork.restoreAntiDumpBytecodeRange(0, fork.code.length);
             }
             await fork.runAsync()
             const res = fork.read(returnDataStore);
@@ -664,6 +684,18 @@ const implOpcode = {
         const cur = this.read(registers.INSTRUCTION_POINTER);
         const errorRegister = this.readByte();
         const catchOffset = this.readJumpTargetDWORD(), finallyOffset = this.readJumpTargetDWORD();
+        
+        // Save current execution state to allow re-entrancy
+        const savedResult = this._tl_opcodeResult;
+        const savedHandler = this._tl_handler;
+        const savedOpcodeState = this.runtimeOpcodeState;
+        
+        const cleanup = () => {
+            this._tl_opcodeResult = savedResult;
+            this._tl_handler = savedHandler;
+            this.runtimeOpcodeState = savedOpcodeState;
+        };
+
         if (this.executionMode === "async") {
             return (async () => {
                 try {
@@ -675,6 +707,7 @@ const implOpcode = {
                 } finally {
                     this.registers[registers.INSTRUCTION_POINTER] = cur + finallyOffset - 1
                     await this.runAsync();
+                    cleanup();
                 }
             })();
         }
@@ -687,6 +720,7 @@ const implOpcode = {
         } finally {
             this.registers[registers.INSTRUCTION_POINTER] = cur + finallyOffset - 1
             this.run();
+            cleanup();
         }
     },
     THROW: function () {
