@@ -776,7 +776,7 @@ async function transpile(code, options) {
     options = options ?? {};
     options.decoratorsMode = options.decoratorsMode ?? "legacy";
     options.deadCodeInjection = options.deadCodeInjection ?? true;
-    options.memoryProtection = options.memoryProtection ?? false;
+    options.memoryProtection = options.memoryProtection ?? true;
     options.opaquePredicates = options.opaquePredicates ?? true;
     options.controlFlowFlattening = options.controlFlowFlattening ?? true;
     options.selfModifyingBytecode = options.selfModifyingBytecode ?? true;

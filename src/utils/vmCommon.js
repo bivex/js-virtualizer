@@ -686,12 +686,13 @@ const implOpcode = {
         const catchOffset = this.readJumpTargetDWORD(), finallyOffset = this.readJumpTargetDWORD();
         
         // Save current execution state to allow re-entrancy
-        const savedResult = this._tl_opcodeResult;
-        const savedHandler = this._tl_handler;
-        const savedOpcodeState = this.runtimeOpcodeState;
+        const savedEnd = this._tl_opcodeResult ? this._tl_opcodeResult._end : false;
         
         const cleanup = () => {
-            this._tl_opcodeResult = savedResult;
+            if (this._tl_opcodeResult) {
+                this._tl_opcodeResult = savedResult;
+                this._tl_opcodeResult._end = savedEnd;
+            }
             this._tl_handler = savedHandler;
             this.runtimeOpcodeState = savedOpcodeState;
         };

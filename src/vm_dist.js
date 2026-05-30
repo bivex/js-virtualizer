@@ -924,10 +924,14 @@ const implOpcode = {
         const errorRegister = this.readByte();
         const catchOffset = this.readJumpTargetDWORD(), finallyOffset = this.readJumpTargetDWORD();
         const savedResult = this._tl_opcodeResult;
+        const savedEnd = this._tl_opcodeResult ? this._tl_opcodeResult._end : false;
         const savedHandler = this._tl_handler;
         const savedOpcodeState = this.runtimeOpcodeState;
         const cleanup = () => {
-            this._tl_opcodeResult = savedResult;
+            if (this._tl_opcodeResult) {
+                this._tl_opcodeResult = savedResult;
+                this._tl_opcodeResult._end = savedEnd;
+            }
             this._tl_handler = savedHandler;
             this.runtimeOpcodeState = savedOpcodeState;
         };
