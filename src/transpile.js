@@ -1245,6 +1245,19 @@ async function transpile(code, options) {
         };
         ilvSharedConfig = sharedConfig;
 
+        // Pre-reserve registers for interleaving
+        const logicalCffStateReg = unifiedRegisterCount - 1;
+        const logicalSelectorReg = unifiedRegisterCount - 2;
+        const logicalTempReg1 = unifiedRegisterCount - 3;
+        const logicalTempReg2 = unifiedRegisterCount - 4;
+
+        sharedConfig.reservedLogicalRegisters = [
+            logicalCffStateReg,
+            logicalSelectorReg,
+            logicalTempReg1,
+            logicalTempReg2
+        ];
+
         for (const node of virtualizeNodes) {
             virtualizeFunction(node, sharedConfig);
         }
@@ -1474,6 +1487,9 @@ async function transpile(code, options) {
                 .replace("%ARG_SCRAMBLE_SETUP%", entry._aliasSetup)
                 .replace("%DEPENDENCIES%", JSON.stringify(entry._regToDep).replace(/"/g, ""))
                 .replace(/%FUNCTION_ID%/g, i.toString())
+                .replace("%SELECTOR_REG%", physicalSelectorReg.toString())
+                .replace("%CFF_STATE_REG%", physicalCffStateReg.toString())
+                .replace("%CFF_INITIAL_STATE%", cffInitState.toString())
                 .replace(/%OUTPUT_REGISTER%/g, entry._outputRegister.toString())
                 .replace("%CFF_INNER_PROGRAM%", cffInnerProgram)
                 .replace("%RUNCMD%", entry.node.async ? "await VM.runAsync()" : "VM.run()");

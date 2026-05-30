@@ -1287,10 +1287,11 @@ class JSVM {
         this.codeBackup = null
         this.selfModifySeed = 0
         this.antiDump = false
-        this.antiDumpSeed = 0
-        this.antiDumpHighWaterMark = 0
-        this.antiDumpBackup = null
-        this.registers[registers.INSTRUCTION_POINTER] = 0
+        this.antiDumpSeed = 0;
+        this.antiDumpHighWaterMark = 0;
+        this.antiDumpBackup = null;
+        this._tl_opcodeResult = { _nop: true };
+        this.registers[registers.INSTRUCTION_POINTER] = 0;
         this.registers[registers.UNDEFINED] = undefined
         this.registers[registers.VOID] = 0
         Object.keys(opcodes).forEach((opcode) => {
@@ -1566,7 +1567,7 @@ class JSVM {
     }
 
     _phasePostExec() {
-        if (this._tl_opcodeResult._nop) return
+        if (!this._tl_opcodeResult || this._tl_opcodeResult._nop) return
         const {opcode, position} = this._tl_opcodeResult
         this.advanceRuntimeOpcodeState(opcode, position)
         this.rotateProtectedRegisters()

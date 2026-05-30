@@ -145,8 +145,10 @@ function resolveFunctionDeclaration(node, options) {
     this.chunk.append(new Opcode('END'))
     this.exitVFuncContext()
     jumpOver.modifyArgs(this.encodeDWORD(this.chunk.getCurrentIP() - jumpOverIP))
+    const physicalDeclareRegister = this.registerScrambleMap ? (this.registerScrambleMap.get(options.declareRegister) || options.declareRegister) : options.declareRegister;
+
     this.chunk.append(new Opcode('VFUNC_SETUP_CALLBACK', this.encodeDWORD(startIP - this.chunk.getCurrentIP()),
-        options.declareRegister, outputRegister, isAsync ? 1 : 0, hasDynamicThis ? 1 : 0, hasDynamicThis ? thisRegister : 0, usesArguments ? 1 : 0, usesArguments ? argumentsRegister : 0, lastIsRest ? 1 : 0, encodeArrayRegisters(scrambledArgMap), encodeArrayRegisters(argOrder), encodeArrayRegisters(captureMappings)))
+        physicalDeclareRegister, outputRegister, isAsync ? 1 : 0, hasDynamicThis ? 1 : 0, hasDynamicThis ? thisRegister : 0, usesArguments ? 1 : 0, usesArguments ? argumentsRegister : 0, lastIsRest ? 1 : 0, encodeArrayRegisters(scrambledArgMap), encodeArrayRegisters(argOrder), encodeArrayRegisters(captureMappings)))
     this.freeTempLoad(outputRegister)
 
     return {
