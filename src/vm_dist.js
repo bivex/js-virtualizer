@@ -776,7 +776,7 @@ const implOpcode = {
         function runSync(thisArg, args) {
             const fork = new vm.constructor(vm.getProfile());
             fork.setBytecodeIntegrityKey(vm.bytecodeIntegrityKey);
-            fork.code = vm.selfModifyingBytecode ? new Uint8Array(vm.code) : vm.code;
+            fork.code = (vm.selfModifyingBytecode || vm.antiDump) ? new Uint8Array(vm.code) : vm.code;
             fork.registers = vm.captureRegisterSnapshot();
             fork.regstack = [];
             fork.registerRefs = new Map(vm.registerRefs);
@@ -784,11 +784,18 @@ const implOpcode = {
             fork.jumpTargetEncodingEnabled = vm.jumpTargetEncodingEnabled;
             fork.perInstructionEncodingEnabled = vm.perInstructionEncodingEnabled;
             fork.runtimeOpcodeState = vm.runtimeOpcodeState;
-            fork.adoptMemoryProtectionState(vm.memoryProtectionState);
+            fork.adoptMemoryProtectionState(null);
+            if (vm.memoryProtectionState && vm.memoryProtectionState.enabled) {
+                fork.enableMemoryProtection(vm.memoryProtectionKey ?? "");
+            }
             fork.adoptAntiDebugState(vm.antiDebugState);
             fork.selfModifyingBytecode = vm.selfModifyingBytecode;
             fork.codeBackup = vm.codeBackup;
             fork.selfModifySeed = vm.selfModifySeed;
+            fork.antiDump = vm.antiDump;
+            fork.antiDumpSeed = vm.antiDumpSeed;
+            fork.antiDumpBackup = vm.antiDumpBackup;
+            fork.antiDumpHighWaterMark = 0;
             bindCaptureReferences(fork);
             const restIndex = argOrder.length - 1;
             if (hasDynamicThis) {
@@ -808,6 +815,9 @@ const implOpcode = {
             fork.registers[registers.INSTRUCTION_POINTER] = cur + fnOffset - 1;
             if (vm.selfModifyingBytecode && vm.codeBackup) {
                 fork.restoreBytecodeRange(0, fork.code.length);
+            }
+            if (vm.antiDump && vm.antiDumpBackup) {
+                fork.restoreAntiDumpBytecodeRange(0, fork.code.length);
             }
             fork.run()
             const res = fork.read(returnDataStore);
@@ -817,7 +827,7 @@ const implOpcode = {
         async function runAsync(thisArg, args) {
             const fork = new vm.constructor(vm.getProfile());
             fork.setBytecodeIntegrityKey(vm.bytecodeIntegrityKey);
-            fork.code = vm.selfModifyingBytecode ? new Uint8Array(vm.code) : vm.code;
+            fork.code = (vm.selfModifyingBytecode || vm.antiDump) ? new Uint8Array(vm.code) : vm.code;
             fork.registers = vm.captureRegisterSnapshot();
             fork.regstack = [];
             fork.registerRefs = new Map(vm.registerRefs);
@@ -825,11 +835,18 @@ const implOpcode = {
             fork.jumpTargetEncodingEnabled = vm.jumpTargetEncodingEnabled;
             fork.perInstructionEncodingEnabled = vm.perInstructionEncodingEnabled;
             fork.runtimeOpcodeState = vm.runtimeOpcodeState;
-            fork.adoptMemoryProtectionState(vm.memoryProtectionState);
+            fork.adoptMemoryProtectionState(null);
+            if (vm.memoryProtectionState && vm.memoryProtectionState.enabled) {
+                fork.enableMemoryProtection(vm.memoryProtectionKey ?? "");
+            }
             fork.adoptAntiDebugState(vm.antiDebugState);
             fork.selfModifyingBytecode = vm.selfModifyingBytecode;
             fork.codeBackup = vm.codeBackup;
             fork.selfModifySeed = vm.selfModifySeed;
+            fork.antiDump = vm.antiDump;
+            fork.antiDumpSeed = vm.antiDumpSeed;
+            fork.antiDumpBackup = vm.antiDumpBackup;
+            fork.antiDumpHighWaterMark = 0;
             bindCaptureReferences(fork);
             const restIndex = argOrder.length - 1;
             if (hasDynamicThis) {
@@ -849,6 +866,9 @@ const implOpcode = {
             fork.registers[registers.INSTRUCTION_POINTER] = cur + fnOffset - 1;
             if (vm.selfModifyingBytecode && vm.codeBackup) {
                 fork.restoreBytecodeRange(0, fork.code.length);
+            }
+            if (vm.antiDump && vm.antiDumpBackup) {
+                fork.restoreAntiDumpBytecodeRange(0, fork.code.length);
             }
             await fork.runAsync()
             const res = fork.read(returnDataStore);
@@ -1281,6 +1301,7 @@ class JSVM {
         this.runtimeOpcodeState = 0
         this.antiDebugState = null
         this.memoryProtectionState = null
+        this.memoryProtectionKey = null
         this.registerRefs = new Map()
         this.executionMode = "sync"
         this.selfModifyingBytecode = false
@@ -1644,6 +1665,7 @@ class JSVM {
     }
 
     enableMemoryProtection(key) {
+        this.memoryProtectionKey = key;
         const existingValues = [];
         for (let register = registerNames.length; register < this.registers.length; register++) {
             existingValues.push({
