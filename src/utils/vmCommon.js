@@ -484,13 +484,7 @@ const implOpcode = {
     FUNC_ARRAY_CALL: function () {
         const fn = this.readByte(), dst = this.readByte(), funcThis = this.readByte(), argsReg = this.readByte();
         const args = this.read(argsReg);
-        const callee = this.read(fn);
-        const targetThis = this.read(funcThis);
-        if (typeof callee !== "function") {
-            console.log(`[JSVM] FUNC_ARRAY_CALL ERROR: callee is not a function! Type: ${typeof callee}, Value: ${callee}, Register: ${fn}`);
-            console.log(`[JSVM] Registers around ${fn}:`, this.registers.slice(Math.max(0, fn - 5), fn + 5));
-        }
-        const res = callee.apply(targetThis, args);
+        const res = this.read(fn).apply(this.read(funcThis), args);
         this.write(dst, res);
     },
     FUNC_ARRAY_CALL_AWAIT: async function () {
