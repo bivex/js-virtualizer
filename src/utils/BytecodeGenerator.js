@@ -300,6 +300,19 @@ class FunctionBytecodeGenerator {
         log(new LogData('No available temp load registers!', 'error', false))
     }
 
+    // Returns the set of all temp-load register numbers (TL1..TL_COUNT).
+    // These registers are reused dynamically throughout execution (e.g. inside
+    // loop bodies), so any pass that injects dead/junk instructions must treat
+    // them as always-live even though they may not be present in
+    // reservedRegisters at the end of code generation.
+    getTempLoadRegisters() {
+        const registers = new Set();
+        for (let i = 1; i <= TL_COUNT; i++) {
+            registers.add(this[`TL${i}`]);
+        }
+        return registers;
+    }
+
     // remember to free the tempload after using it
     freeTempLoad(register) {
         if (this.available[this.TLMap[register]]) {

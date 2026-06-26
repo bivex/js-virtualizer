@@ -997,17 +997,23 @@ async function transpile(code, options) {
                     if (options.opaquePredicates !== false) {
                         const cffEnabled = options.controlFlowFlattening !== false;
                         const cffStateReg = cffEnabled ? vmProfile.registerCount - 1 : undefined;
+                        // Temp-load registers are reused dynamically (e.g. inside loops) even though
+                        // they may not be in reservedRegisters at end-of-generation. They must never
+                        // be reused as opaque scratch, or predicate LOAD_DWORDs corrupt live values.
+                        const tempLoadRegisters = generator.getTempLoadRegisters();
+                        const isUnsafe = (r) =>
+                            r === cffStateReg ||
+                            generator.reservedRegisters.has(r) ||
+                            tempLoadRegisters.has(r);
                         const scratch = [];
                         for (let r = vmProfile.registerCount - 1; r >= 0 && scratch.length < 5; r--) {
-                            if (r === cffStateReg) continue;
-                            if (generator.reservedRegisters.has(r)) continue;
+                            if (isUnsafe(r)) continue;
                             scratch.push(r);
                         }
                         if (scratch.length < 5) {
                             for (let r = 0; r < vmProfile.registerCount && scratch.length < 5; r++) {
                                 if (scratch.includes(r)) continue;
-                                if (generator.reservedRegisters.has(r)) continue;
-                                if (r === cffStateReg) continue;
+                                if (isUnsafe(r)) continue;
                                 scratch.push(r);
                             }
                         }
@@ -1035,11 +1041,19 @@ async function transpile(code, options) {
                             liveRegisters.add(scrambleMap.get(r) ?? r);
                         }
                     }
+                    // Temp-load registers are reused dynamically and must be excluded too.
+                    const tempLoadRegisters = generator.getTempLoadRegisters();
+                    if (scrambleMap && scrambleMap.size > 0) {
+                        for (const r of generator.getTempLoadRegisters()) {
+                            tempLoadRegisters.add(scrambleMap.get(r) ?? r);
+                        }
+                    }
                     insertJunkInStream(generator.chunk, vmProfile.registerCount, {
                         polyEndian,
                         cffStateRegister: options.controlFlowFlattening !== false ? vmProfile.registerCount - 1 : undefined,
                         opaqueScratch: generator.opaqueScratch,
-                        reservedRegisters: liveRegisters
+                        reservedRegisters: liveRegisters,
+                        tempLoadRegisters
                     });
                 }
                 let cffInitialStateId = 0;

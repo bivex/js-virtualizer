@@ -93,6 +93,13 @@ function insertJunkInStream(chunk, registerCount, options = {}) {
     } else if (Array.isArray(options.reservedRegisters)) {
         for (const r of options.reservedRegisters) reserved.add(r);
     }
+    // Temp-load registers are reused dynamically throughout execution, so they must
+    // also be excluded even if they were statically freed before this pass runs.
+    if (options.tempLoadRegisters instanceof Set) {
+        for (const r of options.tempLoadRegisters) reserved.add(r);
+    } else if (Array.isArray(options.tempLoadRegisters)) {
+        for (const r of options.tempLoadRegisters) reserved.add(r);
+    }
     const deadRegs = [];
     // Search the entire register space (not just the top 20) for registers that
     // are genuinely unused. Prefer high registers to keep the search fast in practice.
