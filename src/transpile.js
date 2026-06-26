@@ -1127,6 +1127,7 @@ async function transpile(code, options) {
                 _regToDep: regToDep,
                 _outputRegister: generator.outputRegister,
                 _opaqueScratch: generator.opaqueScratch,
+                _reservedRegisters: new Set(generator.reservedRegisters),
             });
             log(new LogData(`VM profile ${vmProfile.profileId}: ${vmProfile.registerCount} regs, ${vmProfile.dispatcherVariant} dispatcher`, 'accent', false));
             log(new LogData(`Function "${node.id.name}" queued for interleaving`, 'success', false));
@@ -1281,15 +1282,34 @@ async function transpile(code, options) {
                 }
             );
 
-            // Collect opaque scratch from all functions
-            const allOpaqueScratch = [];
+            // Build a safe opaque scratch set for the merged chunk.
+            // Per-function opaqueScratch registers are safe within that function's bytecode but
+            // may collide with TL registers of *other* interleaved functions — using them on the
+            // merged chunk causes silent register clobbering (e.g. LOAD_DWORD junk overwrites a
+            // live string result mid-execution).
+            // Build the union of all registers used by any function, then pick scratch from
+            // registers not in that union (scanning down from registerCount-9).
+            const allUsedRegisters = new Set();
             for (const e of ilvEntries) {
-                if (e._opaqueScratch) allOpaqueScratch.push(...e._opaqueScratch);
+                if (e._reservedRegisters) {
+                    for (const r of e._reservedRegisters) allUsedRegisters.add(r);
+                }
+            }
+            const resolvedScratchBase = sharedConfig.sharedScrambleMap
+                ? (r) => sharedConfig.sharedScrambleMap.get(r) ?? r
+                : (r) => r;
+            const safeScratch = [];
+            for (let r = unifiedRegisterCount - 9; r >= 0 && safeScratch.length < 5; r--) {
+                // skip if this logical register (or its physical mapping) is used by any function
+                const physical = resolvedScratchBase(r);
+                if (!allUsedRegisters.has(r) && !allUsedRegisters.has(physical)) {
+                    safeScratch.push(physical);
+                }
             }
 
             // Apply opaque predicates on merged chunk
-            if (options.opaquePredicates !== false && allOpaqueScratch.length > 0) {
-                insertOpaquePredicates(mergedChunk, allOpaqueScratch, unifiedRegisterCount, {
+            if (options.opaquePredicates !== false && safeScratch.length >= 5) {
+                insertOpaquePredicates(mergedChunk, safeScratch, unifiedRegisterCount, {
                     ...(options.opaquePredicateOptions || {}),
                     polyEndian
                 });
