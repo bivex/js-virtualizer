@@ -29,13 +29,13 @@ describe("interleaveChunks utility", () => {
         c1.append(new Opcode("END")); // 1
         // total 13, exclude last (1) => 12, +5 jump => 17
         const c2 = new VMChunk();
-        c2.append(new Opcode("LOAD_BYTE", 3, 42)); // 2
-        c2.append(new Opcode("END")); // 1 => total 3, excl last 2? Actually 2 bytes before END => 2 +5 = 7
+        c2.append(new Opcode("LOAD_BYTE", 3, 42)); // 3 bytes (opcode + reg + byte)
+        c2.append(new Opcode("END")); // 1 => total 4, excl last 3 => 3 +5 = 8
         const sizes = [c1, c2].map(c => {
             const sumExceptLast = c.code.slice(0, -1).reduce((s, op) => s + op.toBytes().length, 0);
             return sumExceptLast + 5;
         });
-        expect(sizes).toEqual([17, 7]);
+        expect(sizes).toEqual([17, 8]);
     });
 
     test("positions functions contiguously after preamble", () => {
@@ -49,12 +49,11 @@ describe("interleaveChunks utility", () => {
         const c1 = new VMChunk(); c1.append(new Opcode("END"));
         const c2 = new VMChunk(); c2.append(new Opcode("END"));
         const result = interleaveChunks([{ chunk: c1 }, { chunk: c2 }], 16);
-        const expected = (6+4+6)*2 + 1 + // preamble
-                          (c1.code.length===1 ? 0 : 0) +5 + // c1 adjusted: if END is only, code without END is 0? Actually if only END, then body without last => no opcodes, jump 5
-                          (c2.code.length===1 ? 0 : 0) +5 + // similarly
-                          1; // final END
-        // With single END each: adjusted size = 5, two funcs = 10, preamble = 33? Let's compute: selector check per func = 16, 2 funcs = 32, +1 = 33.
-        expect(result.mergedChunk.code.length).toBe(33 + 10 + 1);
+        // preamble: 3 opcodes (LOAD_DWORD+EQ+JUMP_EQ) * 2 funcs + 1 fallback END = 7 opcodes
+        // each func body: only END stripped, replaced by JUMP_UNCONDITIONAL => 1 opcode each
+        // exit END: 1 opcode
+        // total = 7 + 1 + 1 + 1 = 10 opcodes
+        expect(result.mergedChunk.code.length).toBe(10);
     });
 
     test("supports LE endian option", () => {
