@@ -1025,10 +1025,21 @@ async function transpile(code, options) {
                     injectDeadCode(generator.chunk, polyEndian);
                 }
                 if (options.junkInStream) {
+                    // reservedRegisters stores pre-scramble indices; bytecode uses post-scramble indices.
+                    // Map each reserved register through the scramble map so junkInStream can correctly
+                    // identify which post-scramble register slots are actually live.
+                    let liveRegisters = generator.reservedRegisters;
+                    if (scrambleMap && scrambleMap.size > 0) {
+                        liveRegisters = new Set();
+                        for (const r of generator.reservedRegisters) {
+                            liveRegisters.add(scrambleMap.get(r) ?? r);
+                        }
+                    }
                     insertJunkInStream(generator.chunk, vmProfile.registerCount, {
                         polyEndian,
                         cffStateRegister: options.controlFlowFlattening !== false ? vmProfile.registerCount - 1 : undefined,
-                        opaqueScratch: generator.opaqueScratch
+                        opaqueScratch: generator.opaqueScratch,
+                        reservedRegisters: liveRegisters
                     });
                 }
                 let cffInitialStateId = 0;

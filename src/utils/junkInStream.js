@@ -86,10 +86,20 @@ function insertJunkInStream(chunk, registerCount, options = {}) {
     const maxInsertions = options.maxInsertions ?? 20;
 
     const reserved = new Set([cffStateReg, ...opaqueScratch].filter(x => x !== undefined));
-    const deadRegs = [];
-    for (let i = registerCount - 20; i < registerCount - 5 && deadRegs.length < 4; i++) {
-        if (i > 0 && !reserved.has(i)) deadRegs.push(i);
+    // Merge the generator's full live-register set so we never clobber a variable
+    // or temp-load register that is still alive during the stream.
+    if (options.reservedRegisters instanceof Set) {
+        for (const r of options.reservedRegisters) reserved.add(r);
+    } else if (Array.isArray(options.reservedRegisters)) {
+        for (const r of options.reservedRegisters) reserved.add(r);
     }
+    const deadRegs = [];
+    // Search the entire register space (not just the top 20) for registers that
+    // are genuinely unused. Prefer high registers to keep the search fast in practice.
+    for (let i = registerCount - 1; i >= 0 && deadRegs.length < 4; i--) {
+        if (!reserved.has(i)) deadRegs.push(i);
+    }
+
     if (deadRegs.length === 0) return;
 
     const original = chunk.code;
