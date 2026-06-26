@@ -305,10 +305,34 @@ class FunctionBytecodeGenerator {
     // loop bodies), so any pass that injects dead/junk instructions must treat
     // them as always-live even though they may not be present in
     // reservedRegisters at the end of code generation.
+    //
+    // The returned values are the PHYSICAL register numbers actually emitted into
+    // the bytecode (i.e. post-scramble). Use this for passes that run on the final
+    // bytecode (e.g. junkInStream). For passes that select registers in logical
+    // (pre-scramble) space and scramble afterwards (e.g. opaque scratch), use
+    // getLogicalTempLoadRegisters() instead.
     getTempLoadRegisters() {
         const registers = new Set();
         for (let i = 1; i <= TL_COUNT; i++) {
             registers.add(this[`TL${i}`]);
+        }
+        return registers;
+    }
+
+    // Returns the LOGICAL (pre-scramble) indices of the temp-load registers.
+    // reservedRegisters stores logical indices (randomRegister reserves the
+    // logical index but returns the scrambled physical value), so to test
+    // scratch candidates in the same space we must compare logical-to-logical.
+    getLogicalTempLoadRegisters() {
+        const registers = new Set();
+        for (let i = 1; i <= TL_COUNT; i++) {
+            const physical = this[`TL${i}`];
+            if (this.reverseScrambleMap) {
+                const logical = this.reverseScrambleMap.get(physical);
+                registers.add(logical !== undefined ? logical : physical);
+            } else {
+                registers.add(physical);
+            }
         }
         return registers;
     }

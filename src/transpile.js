@@ -1011,7 +1011,10 @@ async function transpile(code, options) {
                         // Temp-load registers are reused dynamically (e.g. inside loops) even though
                         // they may not be in reservedRegisters at end-of-generation. They must never
                         // be reused as opaque scratch, or predicate LOAD_DWORDs corrupt live values.
-                        const tempLoadRegisters = generator.getTempLoadRegisters();
+                        // reservedRegisters and the scratch scan operate in LOGICAL (pre-scramble)
+                        // space, so we must exclude the TL registers' logical indices here. The
+                        // selected scratch is scrambled to physical below.
+                        const tempLoadRegisters = generator.getLogicalTempLoadRegisters();
                         const isUnsafe = (r) =>
                             r === cffStateReg ||
                             generator.reservedRegisters.has(r) ||
@@ -1039,20 +1042,20 @@ async function transpile(code, options) {
                     }
                 }
                 if (options.deadCodeInjection) {
-                    // Build the set of registers that are live during execution so the dead
-                    // code sequence never writes to one of them. (CFF can make dead code
-                    // reachable, so this is required, not merely cosmetic.) Map logical
-                    // registers through the scramble map to the physical registers that
-                    // actually appear in the bytecode.
-                    const deadCodeAvoid = new Set(generator.reservedRegisters);
-                    for (const r of generator.getTempLoadRegisters()) deadCodeAvoid.add(r);
-                    if (scrambleMap && scrambleMap.size > 0) {
-                        const physical = new Set();
-                        for (const r of deadCodeAvoid) physical.add(scrambleMap.get(r) ?? r);
-                        injectDeadCode(generator.chunk, polyEndian, physical, vmProfile.registerCount);
-                    } else {
-                        injectDeadCode(generator.chunk, polyEndian, deadCodeAvoid, vmProfile.registerCount);
+                    // Build the set of PHYSICAL registers that are live during execution so the
+                    // dead code sequence never writes to one of them. (CFF can make dead code
+                    // reachable, so this is required, not merely cosmetic.) reservedRegisters holds
+                    // logical indices; the TL registers are already physical — keep both spaces
+                    // correct when scrambling.
+                    const physicalAvoid = new Set();
+                    for (const r of generator.reservedRegisters) {
+                        physicalAvoid.add(scrambleMap && scrambleMap.size > 0 ? (scrambleMap.get(r) ?? r) : r);
                     }
+                    for (const r of generator.getTempLoadRegisters()) physicalAvoid.add(r);
+                    if (generator.opaqueScratch) {
+                        for (const r of generator.opaqueScratch) physicalAvoid.add(r);
+                    }
+                    injectDeadCode(generator.chunk, polyEndian, physicalAvoid, vmProfile.registerCount);
                 }
                 if (options.junkInStream) {
                     // reservedRegisters stores pre-scramble indices; bytecode uses post-scramble indices.
@@ -1066,12 +1069,10 @@ async function transpile(code, options) {
                         }
                     }
                     // Temp-load registers are reused dynamically and must be excluded too.
+                    // getTempLoadRegisters() already returns PHYSICAL values, so they must NOT be
+                    // scrambled again (doing so maps a physical value through the logical→physical
+                    // scramble map and yields garbage, leaking live registers into the junk pool).
                     const tempLoadRegisters = generator.getTempLoadRegisters();
-                    if (scrambleMap && scrambleMap.size > 0) {
-                        for (const r of generator.getTempLoadRegisters()) {
-                            tempLoadRegisters.add(scrambleMap.get(r) ?? r);
-                        }
-                    }
                     insertJunkInStream(generator.chunk, vmProfile.registerCount, {
                         polyEndian,
                         cffStateRegister: options.controlFlowFlattening !== false ? vmProfile.registerCount - 1 : undefined,
