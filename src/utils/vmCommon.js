@@ -315,6 +315,7 @@ function createProtectedRegisterValue(state, register, value) {
     return {
         __jsvmProtected: true,
         token,
+        epoch: state.laneEpoch,
         guard,
         register
     };
@@ -331,17 +332,23 @@ function restoreProtectedRegisterValue(state, register, value, options = {}) {
         return value;
     }
     if (options.consume) {
+        const laneSeed = (state.seed ^ Math.imul(state.laneEpoch, 0x9e3779b1)) >>> 0;
+        const maskedToken = (value.token ^ createRegisterProtectionMask(laneSeed, register)) >>> 0;
+        const expectedGuard = rotateLeft((maskedToken ^ laneSeed ^ register) >>> 0, 11);
+        if (value.guard !== expectedGuard) {
+            throw new Error("VM register protection token missing");
+        }
         const consumed = state.heap.get(value.token);
         state.heap.delete(value.token);
         return consumed;
     }
     const laneSeed = (state.seed ^ Math.imul(state.laneEpoch, 0x9e3779b1)) >>> 0;
-    const unmaskedToken = (value.token ^ createRegisterProtectionMask(laneSeed, register)) >>> 0;
-    const expectedGuard = rotateLeft((unmaskedToken ^ laneSeed ^ register) >>> 0, 11);
+    const maskedToken = (value.token ^ createRegisterProtectionMask(laneSeed, register)) >>> 0;
+    const expectedGuard = rotateLeft((maskedToken ^ laneSeed ^ register) >>> 0, 11);
     if (value.guard !== expectedGuard) {
         throw new Error("Protected register value validation failed");
     }
-    return state.heap.get(unmaskedToken);
+    return state.heap.get(value.token);
 }
 
 // --- Platform byte abstractions ---
