@@ -335,7 +335,10 @@ function restoreProtectedRegisterValue(state, register, value, options = {}) {
         const laneSeed = (state.seed ^ Math.imul(value.epoch, 0x9e3779b1)) >>> 0;
         const maskedToken = (value.token ^ createRegisterProtectionMask(laneSeed, register)) >>> 0;
         const expectedGuard = rotateLeft((maskedToken ^ laneSeed ^ register) >>> 0, 11);
-        if (value.guard !== expectedGuard || !state.heap.has(value.token)) {
+        if (value.guard !== expectedGuard) {
+            throw new Error("VM register protection check failed");
+        }
+        if (!state.heap.has(value.token)) {
             throw new Error("VM register protection token missing");
         }
         const consumed = state.heap.get(value.token);
@@ -345,8 +348,11 @@ function restoreProtectedRegisterValue(state, register, value, options = {}) {
     const laneSeed = (state.seed ^ Math.imul(value.epoch, 0x9e3779b1)) >>> 0;
     const maskedToken = (value.token ^ createRegisterProtectionMask(laneSeed, register)) >>> 0;
     const expectedGuard = rotateLeft((maskedToken ^ laneSeed ^ register) >>> 0, 11);
-    if (value.guard !== expectedGuard || !state.heap.has(value.token)) {
-        throw new Error("Protected register value validation failed");
+    if (value.guard !== expectedGuard) {
+        throw new Error("VM register protection check failed");
+    }
+    if (!state.heap.has(value.token)) {
+        throw new Error("VM register protection token missing");
     }
     return state.heap.get(value.token);
 }
