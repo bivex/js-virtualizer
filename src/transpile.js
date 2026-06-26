@@ -32,7 +32,7 @@ const {log, LogData} = require("./utils/log");
 const JSVM = require("./vm_dev");
 const obfuscateCode = require("./postTranspilation/obfuscateCode");
 const obfuscateOpcodes = require("./postTranspilation/obfuscateOpcodes");
-const {opNames} = require("./utils/constants");
+const {opNames, registerNames} = require("./utils/constants");
 const {desugarStatementList} = require("./utils/desugar");
 const {shuffle} = require("./utils/random");
 const {insertOpaquePredicates} = require("./utils/opaquePredicates");
@@ -630,9 +630,20 @@ function createArgumentScramblingPlan(paramNames) {
     };
 }
 
-function createDeadCodeSequence(endian = "BE") {
-    const registers = Array.from({length: 6}, () => crypto.randomInt(16, 220));
-    const [counterRegister, oneRegister, stringRegister, arrayRegister, numberRegister, flagRegister] = registers;
+function createDeadCodeSequence(endian = "BE", avoid = new Set(), registerCount = DEFAULT_REGISTER_COUNT) {
+    // Pick 6 registers that are guaranteed not to collide with any register that is
+    // live during execution. Dead code is normally unreachable, but later passes
+    // (notably control-flow flattening) fold every basic block into the dispatch
+    // state machine, which can make this "dead" code reachable — so any register it
+    // writes must be disjoint from real variables, params, temp loads and scratch.
+    const safe = [];
+    for (let r = registerCount - 1; r >= registerNames.length && safe.length < 6; r--) {
+        if (!avoid.has(r)) safe.push(r);
+    }
+    // Destructure defensively: if fewer than 6 safe registers were found, reuse the
+    // last safe one rather than falling back to a blindly random (and possibly live) one.
+    while (safe.length < 6) safe.push(safe[safe.length - 1] ?? registerNames.length);
+    const [counterRegister, oneRegister, stringRegister, arrayRegister, numberRegister, flagRegister] = safe;
     const baitLabel = `__dead_${crypto.randomBytes(4).toString("hex")}`;
     const baitNumber = crypto.randomInt(256, 65535);
 
@@ -689,8 +700,8 @@ function applyMacroOpcodes(chunk) {
     chunk.code = fused;
 }
 
-function injectDeadCode(chunk, endian = "BE") {
-    const decoySequence = createDeadCodeSequence(endian);
+function injectDeadCode(chunk, endian = "BE", avoid = new Set(), registerCount = DEFAULT_REGISTER_COUNT) {
+    const decoySequence = createDeadCodeSequence(endian, avoid, registerCount);
     const decoyLength = decoySequence.reduce((total, opcode) => total + opcode.toBytes().length, 0);
 
     if (chunk.code.length === 0 || chunk.code[chunk.code.length - 1].name !== "END") {
@@ -1028,7 +1039,20 @@ async function transpile(code, options) {
                     }
                 }
                 if (options.deadCodeInjection) {
-                    injectDeadCode(generator.chunk, polyEndian);
+                    // Build the set of registers that are live during execution so the dead
+                    // code sequence never writes to one of them. (CFF can make dead code
+                    // reachable, so this is required, not merely cosmetic.) Map logical
+                    // registers through the scramble map to the physical registers that
+                    // actually appear in the bytecode.
+                    const deadCodeAvoid = new Set(generator.reservedRegisters);
+                    for (const r of generator.getTempLoadRegisters()) deadCodeAvoid.add(r);
+                    if (scrambleMap && scrambleMap.size > 0) {
+                        const physical = new Set();
+                        for (const r of deadCodeAvoid) physical.add(scrambleMap.get(r) ?? r);
+                        injectDeadCode(generator.chunk, polyEndian, physical, vmProfile.registerCount);
+                    } else {
+                        injectDeadCode(generator.chunk, polyEndian, deadCodeAvoid, vmProfile.registerCount);
+                    }
                 }
                 if (options.junkInStream) {
                     // reservedRegisters stores pre-scramble indices; bytecode uses post-scramble indices.

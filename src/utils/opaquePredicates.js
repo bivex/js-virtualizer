@@ -135,21 +135,47 @@ function insertOpaquePredicates(chunk, opaqueScratch, registerCount, options = {
     const [rA, rB, rC, rD, rE] = opaqueScratch;
     const junkRegs = [rD, rE, rA];
 
-    // Build set of opcode indices inside VFUNC bodies
+    // Build set of opcode indices inside VFUNC bodies.
+    // A nested function's bytecode is emitted as:
+    //   [JUMP_UNCONDITIONAL jumpOver] [body opcodes...] [END] [VFUNC_SETUP_CALLBACK]
+    // The jumpOver is the JUMP_UNCONDITIONAL whose target lies at or beyond the
+    // following VFUNC_SETUP_CALLBACK. Mark every opcode from the jumpOver through the
+    // VFUNC_SETUP_CALLBACK so we never splice a predicate into the callback body
+    // (which would clobber captured/argument registers mid-execution). The previous
+    // heuristic scanned backwards for the nearest JUMP_UNCONDITIONAL and matched the
+    // wrong jump whenever junk/dead-code had injected one earlier in the stream.
     const vfuncRegion = new Set();
+    const opcodeByteOffsets = [];
+    {
+        let bpos = 0;
+        for (let i = 0; i < code.length; i++) {
+            opcodeByteOffsets.push(bpos);
+            bpos += code[i].toBytes().length;
+        }
+    }
     for (let i = 0; i < code.length; i++) {
-        if (code[i].name === "VFUNC_SETUP_CALLBACK") {
-            let j = i - 1;
-            while (j >= 0 && code[j].name === "END") j--;
-            while (j >= 0) {
-                if (code[j].name === "JUMP_UNCONDITIONAL") {
-                    for (let k = j; k <= i; k++) {
-                        vfuncRegion.add(k);
-                    }
-                    break;
+        if (code[i].name !== "VFUNC_SETUP_CALLBACK") continue;
+        const vfuncByte = opcodeByteOffsets[i];
+        // Scan forward from 0 to find the jumpOver: the first JUMP_UNCONDITIONAL
+        // whose target is >= vfuncByte (it skips over the whole callback body).
+        for (let j = 0; j < i; j++) {
+            if (code[j].name !== "JUMP_UNCONDITIONAL") continue;
+            const cur = opcodeByteOffsets[j] + 1;
+            const offset = readDWORD(code[j].data, 0, polyEndian);
+            const target = cur + offset - 1;
+            if (target >= vfuncByte) {
+                for (let k = j; k <= i; k++) {
+                    vfuncRegion.add(k);
                 }
-                j--;
+                break;
             }
+        }
+        // Fallback: if no jumpOver was found, conservatively protect the trailing
+        // END + VFUNC_SETUP_CALLBACK pair at minimum.
+        if (!vfuncRegion.has(i)) {
+            let j = i;
+            while (j > 0 && code[j - 1].name === "END") j--;
+            for (let k = j; k <= i; k++) vfuncRegion.add(k);
         }
     }
 
