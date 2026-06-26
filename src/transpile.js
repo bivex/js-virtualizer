@@ -933,43 +933,9 @@ async function transpile(code, options) {
                     generator.reservedRegisters.add(vmProfile.registerCount - r);
                 }
 
-                // Reserve scratch registers for opaque predicates to avoid clobbering live registers
-                let opaqueScratch = [];
-                if (options.opaquePredicates !== false) {
-                    const cffEnabled = options.controlFlowFlattening !== false;
-                    const cffStateReg = cffEnabled ? vmProfile.registerCount - 1 : undefined;
-                    // Pick 5 high-numbered registers, avoiding CFF state and any already reserved
-                    for (let r = vmProfile.registerCount - 1; r >= 0 && opaqueScratch.length < 5; r--) {
-                        if (r === cffStateReg) continue;
-                        if (generator.reservedRegisters.has(r)) continue;
-                        opaqueScratch.push(r);
-                    }
-                    // If not enough, scan from low end as fallback
-                    if (opaqueScratch.length < 5) {
-                        for (let r = 0; r < vmProfile.registerCount && opaqueScratch.length < 5; r++) {
-                            if (opaqueScratch.includes(r)) continue;
-                            if (generator.reservedRegisters.has(r)) continue;
-                            if (r === cffStateReg) continue;
-                            opaqueScratch.push(r);
-                        }
-                    }
-                    if (opaqueScratch.length === 5) {
-                        for (const reg of opaqueScratch) {
-                            generator.reservedRegisters.add(reg);
-                        }
-                        generator.opaqueScratch = opaqueScratch;
-                    } else {
-                        // Not enough free registers; skip opaque predicates
-                        generator.opaqueScratch = null;
-                    }
-                } else {
-                    generator.opaqueScratch = null;
-                }
+                // opaqueScratch will be selected after generate() so that all TL registers are in reservedRegisters
 
-                // Scramble opaque scratch registers if polymorphic
-                if (options.polymorphic && generator.opaqueScratch) {
-                    generator.opaqueScratch = generator.opaqueScratch.map(reg => scrambleMap.get(reg) ?? reg);
-                }
+                // Scramble opaque scratch registers if polymorphic — done after selection below
 
                 for (const dependency of dependencies) {
                     const register = generator.randomRegister();
@@ -1024,6 +990,37 @@ async function transpile(code, options) {
 
                 generator.generate();
                 applyMacroOpcodes(generator.chunk);
+
+                // Select opaque scratch registers NOW — after generate() so reservedRegisters contains all TL registers
+                {
+                    generator.opaqueScratch = null;
+                    if (options.opaquePredicates !== false) {
+                        const cffEnabled = options.controlFlowFlattening !== false;
+                        const cffStateReg = cffEnabled ? vmProfile.registerCount - 1 : undefined;
+                        const scratch = [];
+                        for (let r = vmProfile.registerCount - 1; r >= 0 && scratch.length < 5; r--) {
+                            if (r === cffStateReg) continue;
+                            if (generator.reservedRegisters.has(r)) continue;
+                            scratch.push(r);
+                        }
+                        if (scratch.length < 5) {
+                            for (let r = 0; r < vmProfile.registerCount && scratch.length < 5; r++) {
+                                if (scratch.includes(r)) continue;
+                                if (generator.reservedRegisters.has(r)) continue;
+                                if (r === cffStateReg) continue;
+                                scratch.push(r);
+                            }
+                        }
+                        if (scratch.length === 5) {
+                            for (const reg of scratch) generator.reservedRegisters.add(reg);
+                            generator.opaqueScratch = scratch;
+                        }
+                    }
+                    // Scramble if polymorphic
+                    if (options.polymorphic && generator.opaqueScratch) {
+                        generator.opaqueScratch = generator.opaqueScratch.map(reg => scrambleMap.get(reg) ?? reg);
+                    }
+                }
                 if (options.deadCodeInjection) {
                     injectDeadCode(generator.chunk, polyEndian);
                 }
