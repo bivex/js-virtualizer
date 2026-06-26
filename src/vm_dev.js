@@ -972,6 +972,10 @@ class JSVM {
 
     _phaseExecute() {
         if (this._tl_opcodeResult._end || this._tl_opcodeResult._nop) return
+        // In async mode with dispatchObfuscation the dedicated async phase (phase 4) calls
+        // _tl_handler with await.  Skip the synchronous call here to avoid double invocation
+        // and un-awaited async handlers.
+        if (this.executionMode === 'async') return
         this._tl_handler()
     }
 

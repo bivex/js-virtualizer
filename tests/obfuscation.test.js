@@ -51,6 +51,10 @@ function decodeEmbeddedBytecode(transpiledSource, vmSource) {
     const vm = new JSVM();
 
     registerExternalBytecodeKeys(vmSource);
+    // Register whitebox tables if present in vm source
+    for (const [, keyId, tablesJson] of vmSource.matchAll(/setWhiteboxTables\('([^']+)',\s*(\{[\s\S]*?\})\);/g)) {
+        try { JSVM.setWhiteboxTables(keyId, JSON.parse(tablesJson)); } catch (_) {}
+    }
     vm.setBytecodeIntegrityKey(integrityKey);
     vm.loadFromString(protectedBytecode, encoding);
 
@@ -194,7 +198,9 @@ console.log(demo());
             expect(result.transpiled).toContain(keyId);
         }
         expect(result.transpiled).toContain("JSCX1:");
-        expect(result.transpiled).toContain(":IJS:");
+        // whiteboxEncryption is on by default, so flags include 'W'; accept either form
+        const hasFlags = result.transpiled.includes(":IJS:") || result.transpiled.includes(":IJSW:");
+        expect(hasFlags).toBe(true);
     });
 
     test("synthesizes macro opcodes for common opcode traces", async () => {

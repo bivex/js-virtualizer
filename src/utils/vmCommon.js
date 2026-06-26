@@ -331,8 +331,9 @@ function restoreProtectedRegisterValue(state, register, value, options = {}) {
         return value;
     }
     if (options.consume) {
+        const consumed = state.heap.get(value.token);
         state.heap.delete(value.token);
-        return value.value;
+        return consumed;
     }
     const laneSeed = (state.seed ^ Math.imul(state.laneEpoch, 0x9e3779b1)) >>> 0;
     const unmaskedToken = (value.token ^ createRegisterProtectionMask(laneSeed, register)) >>> 0;
@@ -680,12 +681,15 @@ const implOpcode = {
         const catchOffset = this.readJumpTargetDWORD(), finallyOffset = this.readJumpTargetDWORD();
         
         // Save current execution state to allow re-entrancy
+        const savedResult = this._tl_opcodeResult || null;
         const savedEnd = this._tl_opcodeResult ? this._tl_opcodeResult._end : false;
-        
+        const savedHandler = this._tl_handler;
+        const savedOpcodeState = this.runtimeOpcodeState;
+
         const cleanup = () => {
             if (this._tl_opcodeResult) {
                 this._tl_opcodeResult = savedResult;
-                this._tl_opcodeResult._end = savedEnd;
+                if (this._tl_opcodeResult) this._tl_opcodeResult._end = savedEnd;
             }
             this._tl_handler = savedHandler;
             this.runtimeOpcodeState = savedOpcodeState;
