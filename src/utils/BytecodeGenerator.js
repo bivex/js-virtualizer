@@ -56,8 +56,10 @@ class FunctionBytecodeGenerator {
             ? Math.max(registerNames.length + 1, Math.min(options.registerCount, DEFAULT_REGISTER_COUNT))
             : DEFAULT_REGISTER_COUNT;
         this.reservedRegisters = new Set()
+        this.allAllocatedRegisters = new Set()
         if (options.cffStateRegister !== undefined) {
             this.reservedRegisters.add(options.cffStateRegister);
+            this.allAllocatedRegisters.add(options.cffStateRegister);
         }
         this.registerScrambleMap = options.registerScrambleMap || null;
         this.reverseScrambleMap = options.reverseScrambleMap || null;
@@ -281,6 +283,7 @@ class FunctionBytecodeGenerator {
             register = crypto.randomInt(registerNames.length, this.registerCount);
         }
         this.reservedRegisters.add(register);
+        this.allAllocatedRegisters.add(register);
 
         if (this.registerScrambleMap) {
             const scrambled = this.registerScrambleMap.get(register);
@@ -595,7 +598,7 @@ class FunctionBytecodeGenerator {
                             assert(key.type === 'Identifier', 'ObjectPattern key is not an Identifier!')
                             assert(value.type === 'Identifier', 'ObjectPattern value is not an Identifier!')
                             this.declareVariable(value.name, this.randomRegister(), {functionScoped})
-                            const propRegister = this.randomRegister()
+                            const propRegister = this.getAvailableTempLoad()
                             const prop = new BytecodeValue(key.name, propRegister)
                             this.chunk.append(prop.getLoadOpcode(this.endian))
                             this.chunk.append(new Opcode('GET_PROP', this.getVariable(value.name), objectRegister, propRegister))

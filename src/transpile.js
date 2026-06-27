@@ -942,6 +942,7 @@ async function transpile(code, options) {
                 // Reserve top 8 registers to avoid collisions with VM/Interleaver/CFF internal registers (e.g. selectorReg, tempRegs, cffState)
                 for (let r = 1; r <= 8; r++) {
                     generator.reservedRegisters.add(vmProfile.registerCount - r);
+                    generator.allAllocatedRegisters.add(vmProfile.registerCount - r);
                 }
 
                 // opaqueScratch will be selected after generate() so that all TL registers are in reservedRegisters
@@ -1017,7 +1018,7 @@ async function transpile(code, options) {
                         const tempLoadRegisters = generator.getLogicalTempLoadRegisters();
                         const isUnsafe = (r) =>
                             r === cffStateReg ||
-                            generator.reservedRegisters.has(r) ||
+                            generator.allAllocatedRegisters.has(r) ||
                             tempLoadRegisters.has(r);
                         const scratch = [];
                         for (let r = vmProfile.registerCount - 1; r >= 0 && scratch.length < 5; r--) {
@@ -1032,7 +1033,10 @@ async function transpile(code, options) {
                             }
                         }
                         if (scratch.length === 5) {
-                            for (const reg of scratch) generator.reservedRegisters.add(reg);
+                            for (const reg of scratch) {
+                                generator.reservedRegisters.add(reg);
+                                generator.allAllocatedRegisters.add(reg);
+                            }
                             generator.opaqueScratch = scratch;
                         }
                     }
@@ -1048,7 +1052,7 @@ async function transpile(code, options) {
                     // logical indices; the TL registers are already physical — keep both spaces
                     // correct when scrambling.
                     const physicalAvoid = new Set();
-                    for (const r of generator.reservedRegisters) {
+                    for (const r of generator.allAllocatedRegisters) {
                         physicalAvoid.add(scrambleMap && scrambleMap.size > 0 ? (scrambleMap.get(r) ?? r) : r);
                     }
                     for (const r of generator.getTempLoadRegisters()) physicalAvoid.add(r);
@@ -1061,10 +1065,10 @@ async function transpile(code, options) {
                     // reservedRegisters stores pre-scramble indices; bytecode uses post-scramble indices.
                     // Map each reserved register through the scramble map so junkInStream can correctly
                     // identify which post-scramble register slots are actually live.
-                    let liveRegisters = generator.reservedRegisters;
+                    let liveRegisters = generator.allAllocatedRegisters;
                     if (scrambleMap && scrambleMap.size > 0) {
                         liveRegisters = new Set();
-                        for (const r of generator.reservedRegisters) {
+                        for (const r of generator.allAllocatedRegisters) {
                             liveRegisters.add(scrambleMap.get(r) ?? r);
                         }
                     }
@@ -1174,7 +1178,7 @@ async function transpile(code, options) {
                 _regToDep: regToDep,
                 _outputRegister: generator.outputRegister,
                 _opaqueScratch: generator.opaqueScratch,
-                _reservedRegisters: new Set(generator.reservedRegisters),
+                _reservedRegisters: new Set(generator.allAllocatedRegisters),
             });
             log(new LogData(`VM profile ${vmProfile.profileId}: ${vmProfile.registerCount} regs, ${vmProfile.dispatcherVariant} dispatcher`, 'accent', false));
             log(new LogData(`Function "${node.id.name}" queued for interleaving`, 'success', false));
