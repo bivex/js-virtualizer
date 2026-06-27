@@ -73,12 +73,16 @@ async function main() {
     const noMemNestedFn = await buildFn({memoryProtection: false, deadCodeInjection: false, randomizeVMProfiles: true, nestedVM: true});
     const noMemNestedAvg = bench("hardened VM, memoryProtection: false + nested VM", () => noMemNestedFn(N));
 
+    const advCffFn = await buildFn({memoryProtection: true, deadCodeInjection: true, randomizeVMProfiles: true, advancedCFF: true});
+    const advCffAvg = bench("hardened VM + advancedCFF", () => advCffFn(N));
+
     console.log("\n--- slowdown vs original ---");
     console.log(`light VM:                                         ${(lightAvg / origAvg).toFixed(1)}x`);
     console.log(`hardened VM (default):                            ${(hardenedAvg / origAvg).toFixed(1)}x`);
     console.log(`hardened VM + nested VM:                          ${(hardenedNestedAvg / origAvg).toFixed(1)}x`);
     console.log(`hardened VM, memoryProtection: false:             ${(noMemAvg / origAvg).toFixed(1)}x`);
     console.log(`hardened VM, memoryProtection: false + nested VM: ${(noMemNestedAvg / origAvg).toFixed(1)}x`);
+    console.log(`hardened VM + advancedCFF:                         ${(advCffAvg / origAvg).toFixed(1)}x`);
 }
 
 main().catch(console.error);
