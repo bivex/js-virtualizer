@@ -501,7 +501,38 @@ function transformSuperStatement(statement, options) {
     }
 }
 
+function replaceThisWithClassName(node, className) {
+    if (!node) return;
+    const walkAndReplace = (current) => {
+        if (!current) return;
+        if (current.type === "ThisExpression") {
+            current.type = "Identifier";
+            current.name = className;
+            delete current.start;
+            delete current.end;
+            return;
+        }
+        if (current.type === "FunctionDeclaration" || current.type === "FunctionExpression" || current.type === "ClassDeclaration" || current.type === "ClassExpression") {
+            return;
+        }
+        for (const key of Object.keys(current)) {
+            const val = current[key];
+            if (val && typeof val === "object") {
+                if (Array.isArray(val)) {
+                    val.forEach(item => walkAndReplace(item));
+                } else if (val.type) {
+                    walkAndReplace(val);
+                }
+            }
+        }
+    };
+    walkAndReplace(node);
+}
+
 function buildFieldInitializationCode(field, targetCode, privateFields, options) {
+    if (options.isStatic) {
+        replaceThisWithClassName(field.value, targetCode);
+    }
     const valueCode = field.value
         ? escodegen.generate(
             applyClassExpressionTransforms(field.value, privateFields, options)
@@ -576,6 +607,9 @@ function buildPrivateMemberInitializationCode(info, targetCode, privateFields, o
     let valueCode;
 
     if (info.kind === "field") {
+        if (options.isStatic) {
+            replaceThisWithClassName(info.value, targetCode);
+        }
         valueCode = info.value
             ? escodegen.generate(applyClassExpressionTransforms(info.value, privateFields, options))
             : "undefined";

@@ -13,7 +13,7 @@
  * Commercial licensing available upon request.
  */
 
-const {BytecodeValue} = require("../utils/assembler");
+const {BytecodeValue, Opcode} = require("../utils/assembler");
 const {log, LogData} = require("../utils/log");
 const {registers} = require("../utils/constants");
 
@@ -59,10 +59,20 @@ function resolveExpression(expression, options) {
         }
         case 'Literal': {
             const tempRegister = this.getAvailableTempLoad();
-            const literalValue = new BytecodeValue(expression.value, tempRegister);
-            this.chunk.append(literalValue.getLoadOpcode(this.endian));
-            outputRegister = literalValue.register
-            log(`Loaded literal: ${expression.value} at register ${outputRegister}`)
+            if (expression.value === null) {
+                this.chunk.append(new Opcode('SET_NULL', tempRegister));
+                outputRegister = tempRegister;
+                log(`Loaded null at register ${outputRegister}`);
+            } else if (expression.value === undefined) {
+                this.chunk.append(new Opcode('SET_UNDEFINED', tempRegister));
+                outputRegister = tempRegister;
+                log(`Loaded undefined at register ${outputRegister}`);
+            } else {
+                const literalValue = new BytecodeValue(expression.value, tempRegister);
+                this.chunk.append(literalValue.getLoadOpcode(this.endian));
+                outputRegister = literalValue.register;
+                log(`Loaded literal: ${expression.value} at register ${outputRegister}`);
+            }
             break
         }
         case 'MemberExpression': {

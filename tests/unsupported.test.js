@@ -326,7 +326,30 @@ console.log(demo());
         expect(virtualizedOutput.trim()).toBe("15:20");
     });
 
-    test.todo("supports private instance methods inside virtualized functions");
+    test("supports private instance methods inside virtualized functions", async () => {
+        const code = `
+// @virtualize
+function demo() {
+  class FingerprintBox {
+    #format(value) {
+      return "i:" + value;
+    }
+
+    render(value) {
+      return this.#format(value + 3);
+    }
+  }
+
+  return new FingerprintBox().render(6);
+}
+
+console.log(demo());
+`;
+
+        const {originalOutput, virtualizedOutput} = await transpileAndRun(code, "private-instance-methods");
+        expect(virtualizedOutput).toBe(originalOutput);
+        expect(virtualizedOutput.trim()).toBe("i:9");
+    });
 
     test("supports private static methods inside virtualized functions", async () => {
         const code = `
@@ -433,7 +456,28 @@ console.log(demo());
         expect(virtualizedOutput.trim()).toBe("14");
     });
 
-    test.todo("supports private brand checks inside virtualized functions");
+    test("supports private brand checks inside virtualized functions", async () => {
+        const code = `
+// @virtualize
+function demo() {
+  class FingerprintBox {
+    #brand;
+    static check(obj) {
+      return #brand in obj;
+    }
+  }
+
+  const box = new FingerprintBox();
+  return [FingerprintBox.check(box), FingerprintBox.check({})].join(":");
+}
+
+console.log(demo());
+`;
+
+        const {originalOutput, virtualizedOutput} = await transpileAndRun(code, "private-brand-check");
+        expect(virtualizedOutput).toBe(originalOutput);
+        expect(virtualizedOutput.trim()).toBe("true:false");
+    });
 
     test("supports computed class keys inside virtualized functions", async () => {
         const code = `
@@ -466,11 +510,101 @@ console.log(demo());
         expect(virtualizedOutput.trim()).toBe("k:9");
     });
 
-    test.todo("supports computed super property access inside virtualized functions");
+    test("supports computed super property access inside virtualized functions", async () => {
+        const code = `
+// @virtualize
+function demo() {
+  class Base {
+    greet() {
+      return "base";
+    }
+  }
 
-    test.todo("supports super inside instance and static field initializers");
+  class Derived extends Base {
+    greet(key) {
+      return super[key]();
+    }
+  }
 
-    test.todo("supports async class methods across public, private, static, and inherited cases");
+  return new Derived().greet("greet");
+}
+
+console.log(demo());
+`;
+
+        const {originalOutput, virtualizedOutput} = await transpileAndRun(code, "class-computed-super");
+        expect(virtualizedOutput).toBe(originalOutput);
+        expect(virtualizedOutput.trim()).toBe("base");
+    });
+
+    test("supports super inside instance and static field initializers", async () => {
+        const code = `
+// @virtualize
+function demo() {
+  class Base {
+    greet() {
+      return "base";
+    }
+  }
+
+  class Derived extends Base {
+    greetField = super.greet() + ":field";
+    static greetStaticField = "static:" + new this().greetField;
+  }
+
+  return Derived.greetStaticField;
+}
+
+console.log(demo());
+`;
+
+        const {originalOutput, virtualizedOutput} = await transpileAndRun(code, "class-super-initializers");
+        expect(virtualizedOutput).toBe(originalOutput);
+        expect(virtualizedOutput.trim()).toBe("static:base:field");
+    });
+
+    test("supports async class methods across public, private, static, and inherited cases", async () => {
+        const code = `
+// @virtualize
+async function demo() {
+  class Base {
+    async greetBase() {
+      return "base";
+    }
+  }
+
+  class Derived extends Base {
+    async greetPublic() {
+      return (await this.greetBase()) + ":public";
+    }
+
+    async #greetPrivate() {
+      return (await this.greetPublic()) + ":private";
+    }
+
+    async testPrivate() {
+      return await this.#greetPrivate();
+    }
+
+    static async greetStatic() {
+      return "static";
+    }
+  }
+
+  const d = new Derived();
+  const resPublic = await d.greetPublic();
+  const resPrivate = await d.testPrivate();
+  const resStatic = await Derived.greetStatic();
+  return [resPublic, resPrivate, resStatic].join("|");
+}
+
+demo().then(res => console.log(res));
+`;
+
+        const {originalOutput, virtualizedOutput} = await transpileAndRun(code, "class-async-methods");
+        expect(virtualizedOutput).toBe(originalOutput);
+        expect(virtualizedOutput.trim()).toBe("base:public|base:public:private|static");
+    });
 
     test("supports method decorators inside virtualized functions", async () => {
         const code = `
@@ -594,7 +728,29 @@ console.log(demo());
         expect(virtualizedOutput.trim()).toBe("class:std");
     });
 
-    test.todo("supports async concurrency across the whole virtualized program");
+    test("supports async concurrency across the whole virtualized program", async () => {
+        const code = `
+async function delay(ms, val) {
+  return new Promise(resolve => setTimeout(() => resolve(val), ms));
+}
+
+// @virtualize
+async function demo() {
+  const p1 = delay(10, "a");
+  const p2 = delay(20, "b");
+  const p3 = delay(5, "c");
+  
+  const results = await Promise.all([p1, p2, p3]);
+  return results.join(":");
+}
+
+demo().then(res => console.log(res));
+`;
+
+        const {originalOutput, virtualizedOutput} = await transpileAndRun(code, "async-concurrency");
+        expect(virtualizedOutput).toBe(originalOutput);
+        expect(virtualizedOutput.trim()).toBe("a:b:c");
+    });
 
     test("supports direct generator functions", async () => {
         const code = `
@@ -643,7 +799,60 @@ async function* demo() {
         expect(virtualizedOutput.trim()).toBe("1:2");
     });
 
-    test.todo("supports generator class methods inside virtualized functions"); // engine: FUNC_ARRAY_CALL CreateListFromArrayLike bug with generator methods
+    test("supports generator class methods inside virtualized functions", async () => {
+        const code = `
+// @virtualize
+function demo() {
+  class FingerprintBox {
+    *generatorMethod() {
+      yield 10;
+      yield 20;
+      return 30;
+    }
+  }
 
-    test.todo("supports async generator class methods inside virtualized functions"); // engine: FUNC_ARRAY_CALL with async generator methods
+  const iter = new FingerprintBox().generatorMethod();
+  const first = iter.next();
+  const second = iter.next();
+  const third = iter.next();
+  return [first.value, second.value, third.value, third.done].join(":");
+}
+
+console.log(demo());
+`;
+
+        const {originalOutput, virtualizedOutput} = await transpileAndRun(code, "class-generator-methods");
+        expect(virtualizedOutput).toBe(originalOutput);
+        expect(virtualizedOutput.trim()).toBe("10:20:30:true");
+    });
+
+    test("supports async generator class methods inside virtualized functions", async () => {
+        const code = `
+async function collect(iterable) {
+  const values = [];
+  for await (const value of iterable) {
+    values.push(value);
+  }
+  return values.join(":");
+}
+
+// @virtualize
+async function demo() {
+  class FingerprintBox {
+    async *asyncGeneratorMethod() {
+      yield await Promise.resolve(40);
+      yield await Promise.resolve(50);
+    }
+  }
+
+  return await collect(new FingerprintBox().asyncGeneratorMethod());
+}
+
+demo().then(res => console.log(res));
+`;
+
+        const {originalOutput, virtualizedOutput} = await transpileAndRun(code, "class-async-generator-methods");
+        expect(virtualizedOutput).toBe(originalOutput);
+        expect(virtualizedOutput.trim()).toBe("40:50");
+    });
 });

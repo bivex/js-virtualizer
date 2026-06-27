@@ -1,7 +1,34 @@
 const {transpileAndRun} = require("./helpers/runtime");
 
 describe("async surface", () => {
-    test.todo("supports awaited try/catch/finally paths"); // engine: async try/finally SETUP_ARRAY reads corrupt DWORD (Invalid array length)
+    test("supports awaited try/catch/finally paths", async () => {
+        const source = `
+async function delay(ms, val) {
+  return new Promise(resolve => setTimeout(() => resolve(val), ms));
+}
+
+// @virtualize
+async function demo() {
+  let log = [];
+  try {
+    log.push("try-start");
+    const val = await delay(10, "try-await");
+    log.push(val);
+  } catch (e) {
+    log.push("catch:" + e.message);
+  } finally {
+    log.push("finally");
+  }
+  return log.join(":");
+}
+
+demo().then((result) => console.log(result));
+`;
+
+        const {originalOutput, virtualizedOutput} = await transpileAndRun(source, "async-try-catch-finally");
+        expect(virtualizedOutput).toBe(originalOutput);
+        expect(virtualizedOutput.trim()).toBe("try-start:try-await:finally");
+    });
 
     test("supports async callbacks that capture outer this", async () => {
         const source = `
@@ -31,5 +58,31 @@ probe.run().then((result) => console.log(result));
         expect(virtualizedOutput.trim()).toBe("fp:7");
     });
 
-    test.todo("supports nested async helpers alongside Promise.all"); // engine: async nested functions + Promise.all returns null
+    test("supports nested async helpers alongside Promise.all", async () => {
+        const source = `
+async function delay(ms, val) {
+  return new Promise(resolve => setTimeout(() => resolve(val), ms));
+}
+
+// @virtualize
+async function demo() {
+  async function helper1() {
+    return await delay(10, "x");
+  }
+  
+  async function helper2() {
+    return await delay(5, "y");
+  }
+
+  const results = await Promise.all([helper1(), helper2()]);
+  return results.join(":");
+}
+
+demo().then((result) => console.log(result));
+`;
+
+        const {originalOutput, virtualizedOutput} = await transpileAndRun(source, "async-nested-promise-all");
+        expect(virtualizedOutput).toBe(originalOutput);
+        expect(virtualizedOutput.trim()).toBe("x:y");
+    });
 });

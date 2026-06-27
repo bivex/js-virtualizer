@@ -300,6 +300,7 @@ class FunctionBytecodeGenerator {
                 return this[register]
             }
         }
+        console.error("Temp Load Fail available map:", this.available);
         log(new LogData('No available temp load registers!', 'error', false))
     }
 

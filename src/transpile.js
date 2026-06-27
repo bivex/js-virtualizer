@@ -784,6 +784,7 @@ function applyPerInstructionEncoding(chunk, seed) {
 async function transpile(code, options) {
     let nestedKey = 0;
     let innerShuffleSeed = 0;
+    let isESM = false;
     options = options ?? {};
     options.decoratorsMode = options.decoratorsMode ?? "legacy";
     options.deadCodeInjection = options.deadCodeInjection ?? true;
@@ -836,9 +837,13 @@ async function transpile(code, options) {
     if (!vmRelativePath.startsWith(".")) {
         vmRelativePath = `./${vmRelativePath}`
     }
-    const requireInject = requireTemplate.replace("%VM_PATH%", vmRelativePath)
+    isESM = ast.body.some(node => node.type.startsWith("Import") || node.type.startsWith("Export"));
+    const injectCode = isESM
+        ? `import __JSV_RUNTIME_DEFAULT from "${vmRelativePath}";\nconst __JSV_RUNTIME = __JSV_RUNTIME_DEFAULT || (typeof globalThis !== "undefined" && globalThis.JSVM ? globalThis.JSVM : null);\nif (!__JSV_RUNTIME) { throw new Error("JSVM runtime is not available"); }`
+        : requireTemplate.replace("%VM_PATH%", vmRelativePath);
 
-    ast.body.unshift(acorn.parse(requireInject, {ecmaVersion: "latest", sourceType: "module"}).body[0])
+    const injectStatements = acorn.parse(injectCode, {ecmaVersion: "latest", sourceType: "module"}).body;
+    ast.body.unshift(...injectStatements);
 
     function needToVirtualize(node) {
         if (!node || !node.loc || !node.loc.start) {
@@ -901,11 +906,9 @@ async function transpile(code, options) {
         const functionBody = desugarStatementList(node.body.body);
         walk.simple({type: "Program", body: functionBody}, {
             Identifier(identifier) {
-                if (identifier.name === "Object" && !dependencies.includes("Object")) {
-                    dependencies.push("Object");
-                }
-                if (identifier.name === "WeakMap" && !dependencies.includes("WeakMap")) {
-                    dependencies.push("WeakMap");
+                const globals = ["Object", "WeakMap", "WeakSet", "TypeError", "Symbol", "undefined"];
+                if (globals.includes(identifier.name) && !dependencies.includes(identifier.name)) {
+                    dependencies.push(identifier.name);
                 }
             }
         });
@@ -1885,8 +1888,14 @@ async function transpile(code, options) {
         })
     }
 
+    let finalVM = accompanyingVM;
+    if (isESM) {
+        finalVM = `import { createRequire } from 'module';\nconst require = createRequire(import.meta.url);\n` + finalVM;
+        finalVM += "\nexport default JSVM;";
+    }
+
     if (options.writeOutput) {
-        fs.writeFileSync(options.vmOutputPath, accompanyingVM);
+        fs.writeFileSync(options.vmOutputPath, finalVM);
         fs.writeFileSync(options.transpiledOutputPath, transpiledResult);
     }
 

@@ -51,6 +51,18 @@ function resolveFunctionDeclaration(node, options) {
     }
 
     const {params, body} = node;
+    let functionBody = body
+    if (body.type !== 'BlockStatement') {
+        functionBody = {
+            type: 'BlockStatement',
+            body: [
+                {
+                    type: 'ReturnStatement',
+                    argument: body
+                }
+            ]
+        }
+    }
     const label = this.generateOpcodeLabel()
     const outputRegister = this.getAvailableTempLoad()
     const argMap = []
@@ -121,11 +133,18 @@ function resolveFunctionDeclaration(node, options) {
     }
     const argOrder = shuffle(Array.from({length: argMap.length}, (_, index) => index));
     const scrambledArgMap = argOrder.map((index) => argMap[index]);
+    const savedAvailable = { ...this.available }
+    for (const key of Object.keys(this.available)) {
+        this.available[key] = true
+    }
+
     const startIP = this.chunk.getCurrentIP()
     for (const param of hasDefault) {
         this.resolveExpression(param)
     }
-    this.generate(body.body, {functionScope: true})
+    this.generate(functionBody.body, {functionScope: true})
+
+    this.available = savedAvailable
 
     for (const {captureRegister, sourceRegister} of this.vfuncReferences[this.vfuncReferences.length - 1].values()) {
         if (sourceRegister === options.declareRegister) {

@@ -125,7 +125,33 @@ console.log(withDefaults(5), noDefaults(3, 4));
             expect(runNodeScript(path.join(tempDir, "defaults.virtualized.js")).trim()).toBe("15 12");
         });
 
-        test.todo("interleaves functions with rest parameters (engine: rest param register exhaustion)");
+        test("interleaves functions with rest parameters (engine: rest param register exhaustion)", async () => {
+            const source = `
+// @virtualize
+function sumAll(prefix, ...numbers) {
+    let sum = 0;
+    for (let num of numbers) {
+        sum += num;
+    }
+    return prefix + sum;
+}
+// @virtualize
+function concatAll(separator, ...strings) {
+    return strings.join(separator);
+}
+console.log(sumAll("val:", 1, 2, 3), concatAll("-", "a", "b", "c"));
+`;
+            const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "jsvm-ilv-rest-"));
+            await transpile(source, {
+                fileName: "ilv-rest",
+                vmOutputPath: path.join(tempDir, "rest.vm.js"),
+                transpiledOutputPath: path.join(tempDir, "rest.virtualized.js"),
+                passes: ["RemoveUnused"],
+                codeInterleaving: true
+            });
+
+            expect(runNodeScript(path.join(tempDir, "rest.virtualized.js")).trim()).toBe("val:6 a-b-c");
+        });
     });
 
     describe("complex functions", () => {
@@ -223,7 +249,39 @@ console.log(matrixSum(3, 4), nestedIf(5), nestedIf(15), nestedIf(-1));
     });
 
     describe("async functions", () => {
-        test.todo("interleaves async functions (engine: async+interleaving hangs, promise never resolves)");
+        test("interleaves async functions (engine: async+interleaving hangs, promise never resolves)", async () => {
+            const source = `
+async function delay(ms, val) {
+  return new Promise(resolve => setTimeout(() => resolve(val), ms));
+}
+// @virtualize
+async function fetchUser(id) {
+    const name = await delay(10, "User" + id);
+    return name;
+}
+// @virtualize
+async function fetchRole(id) {
+    const role = await delay(5, "Admin:" + id);
+    return role;
+}
+
+(async () => {
+  const user = await fetchUser(123);
+  const role = await fetchRole(123);
+  console.log(user, role);
+})();
+`;
+            const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "jsvm-ilv-async-"));
+            await transpile(source, {
+                fileName: "ilv-async",
+                vmOutputPath: path.join(tempDir, "async.vm.js"),
+                transpiledOutputPath: path.join(tempDir, "async.virtualized.js"),
+                passes: ["RemoveUnused"],
+                codeInterleaving: true
+            });
+
+            expect(runNodeScript(path.join(tempDir, "async.virtualized.js")).trim()).toBe("User123 Admin:123");
+        });
     });
 
     describe("with other protections", () => {
@@ -774,7 +832,29 @@ console.log(reverse('hello'), capitalize('world'));
             expect(runNodeScript(path.join(tempDir, "string.virtualized.js")).trim()).toBe("olleh World");
         });
 
-        test.todo("interleaving with array operations (engine: temp load register exhaustion with array/reduce callbacks)");
+        test("interleaving with array operations (engine: temp load register exhaustion with array/reduce callbacks)", async () => {
+            const source = `
+// @virtualize
+function sumSquares(arr) {
+    return arr.map(x => x * x).reduce((acc, val) => acc + val, 0);
+}
+// @virtualize
+function filterEven(arr) {
+    return arr.filter(x => x % 2 === 0);
+}
+console.log(sumSquares([1, 2, 3]), filterEven([1, 2, 3, 4, 5]).join(","));
+`;
+            const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "jsvm-ilv-array-"));
+            await transpile(source, {
+                fileName: "ilv-array",
+                vmOutputPath: path.join(tempDir, "array.vm.js"),
+                transpiledOutputPath: path.join(tempDir, "array.virtualized.js"),
+                passes: ["RemoveUnused"],
+                codeInterleaving: true
+            });
+
+            expect(runNodeScript(path.join(tempDir, "array.virtualized.js")).trim()).toBe("14 2,4");
+        });
 
         test("interleaving with object operations", async () => {
             const source = `
@@ -858,7 +938,33 @@ console.log(isEven(4), isOdd(4), isEven(5), isOdd(5));
     });
 
     describe("integration with other features", () => {
-        test.todo("interleaving works with nested virtualized functions (engine: no free VM registers for complex nested call patterns)");
+        test("interleaving works with nested virtualized functions (engine: no free VM registers for complex nested call patterns)", async () => {
+            const source = `
+// @virtualize
+function parent(x) {
+    // @virtualize
+    function child(y) {
+        return y * 2;
+    }
+    return child(x) + 1;
+}
+// @virtualize
+function sibling(z) {
+    return z + 5;
+}
+console.log(parent(3), sibling(10));
+`;
+            const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "jsvm-ilv-nested-funcs-"));
+            await transpile(source, {
+                fileName: "ilv-nested-funcs",
+                vmOutputPath: path.join(tempDir, "nested_funcs.vm.js"),
+                transpiledOutputPath: path.join(tempDir, "nested_funcs.virtualized.js"),
+                passes: ["RemoveUnused"],
+                codeInterleaving: true
+            });
+
+            expect(runNodeScript(path.join(tempDir, "nested_funcs.virtualized.js")).trim()).toBe("7 15");
+        });
 
         test("interleaving preserves function order in generated code (f1, f2 in order)", async () => {
             const source = `
@@ -961,6 +1067,36 @@ console.log(mySpecialAdd(7, 3), mySpecialSub(7, 3));
             expect(transpiledSource).toContain("function mySpecialSub(");
         });
 
-        test.todo("interleaved code can be exported as module (engine: ESM output uses require() which fails in ESM context, __JSV_RUNTIME is not a constructor)");
+        test("interleaved code can be exported as module (engine: ESM output uses require() which fails in ESM context, __JSV_RUNTIME is not a constructor)", async () => {
+            const source = `
+// @virtualize
+export function myAdd(a, b) { return a + b; }
+// @virtualize
+export function mySub(a, b) { return a - b; }
+`;
+            const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "jsvm-ilv-esm-"));
+            const transpiledOutputPath = path.join(tempDir, "esm.virtualized.js");
+            
+            // We write a package.json to make it an ESM package
+            fs.writeFileSync(path.join(tempDir, "package.json"), JSON.stringify({ type: "module" }));
+
+            await transpile(source, {
+                fileName: "ilv-esm",
+                vmOutputPath: path.join(tempDir, "esm.vm.js"),
+                transpiledOutputPath,
+                passes: ["RemoveUnused"],
+                codeInterleaving: true
+            });
+
+            // Write a script to test import
+            const testScriptPath = path.join(tempDir, "test.js");
+            fs.writeFileSync(testScriptPath, `
+import { myAdd, mySub } from "./esm.virtualized.js";
+console.log(myAdd(10, 20), mySub(50, 10));
+`);
+
+            const output = runNodeScript(testScriptPath).trim();
+            expect(output).toBe("30 40");
+        });
     });
 });
