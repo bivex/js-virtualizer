@@ -265,14 +265,14 @@ js-virtualizer adds measurable overhead. The table below comes from a synthetic 
 
 | Mode | Avg per call | Slowdown vs original |
 | --- | --- | --- |
-| Original JS | 0.16 ms | 1x |
-| Light VM | 34 ms | ~213x |
-| Hardened VM (default) | 234 ms | ~1475x |
-| Hardened VM + nested VM | 264 ms | ~1660x |
-| Hardened VM, `memoryProtection: false` | 113 ms | ~714x |
-| Hardened VM, `memoryProtection: false` + nested VM | 148 ms | ~929x |
+| Original JS | 0.10 ms | 1x |
+| Light VM | 69 ms | ~700x |
+| Hardened VM (default) | 252 ms | ~2565x |
+| Hardened VM + nested VM | 341 ms | ~3468x |
+| Hardened VM, `memoryProtection: false` | 138 ms | ~1402x |
+| Hardened VM, `memoryProtection: false` + nested VM | 156 ms | ~1588x |
 
-`memoryProtection` uses array-backed storage with dirty-bit tracking — only registers that were written to since the last step are re-protected, instead of all 253 registers every step. Nested VM adds only ~13% overhead on top of the hardened profile since `memoryProtection` overhead is now minimal.
+`memoryProtection` uses array-backed storage with dirty-bit tracking — only registers that were written to since the last step are re-protected, instead of all 253 registers every step. Nested VM adds ~13% overhead when `memoryProtection` is disabled, and ~35% on the fully hardened profile.
 
 > [!NOTE]
 > These numbers are a worst case. A tight compute loop is the scenario most hostile to any VM. For functions that do I/O, DOM work, or infrequent business logic the relative slowdown is much smaller. Benchmark on real project code before deciding which profile to use.

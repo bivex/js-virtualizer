@@ -1,5 +1,5 @@
 // Temporary benchmark script — delete after use
-const {transpile} = require("./src/transpile");
+const {transpile} = require("../../src/transpile");
 const fs = require("fs");
 const path = require("path");
 const os = require("os");
@@ -64,14 +64,21 @@ async function main() {
     const hardenedFn = await buildFn({memoryProtection: true, deadCodeInjection: true, randomizeVMProfiles: true});
     const hardenedAvg = bench("hardened VM (default)", () => hardenedFn(N));
 
+    const hardenedNestedFn = await buildFn({memoryProtection: true, deadCodeInjection: true, randomizeVMProfiles: true, nestedVM: true});
+    const hardenedNestedAvg = bench("hardened VM + nested VM", () => hardenedNestedFn(N));
+
     const noMemFn = await buildFn({memoryProtection: false, deadCodeInjection: false, randomizeVMProfiles: true});
-    const noMemAvg = bench("hardened VM, memoryProtection:false", () => noMemFn(N));
+    const noMemAvg = bench("hardened VM, memoryProtection: false", () => noMemFn(N));
+
+    const noMemNestedFn = await buildFn({memoryProtection: false, deadCodeInjection: false, randomizeVMProfiles: true, nestedVM: true});
+    const noMemNestedAvg = bench("hardened VM, memoryProtection: false + nested VM", () => noMemNestedFn(N));
 
     console.log("\n--- slowdown vs original ---");
-    console.log(`light VM:                       ${(lightAvg / origAvg).toFixed(1)}x`);
-    console.log(`hardened VM (default):          ${(hardenedAvg / origAvg).toFixed(1)}x`);
-    console.log(`hardened VM, no memProtection:  ${(noMemAvg / origAvg).toFixed(1)}x`);
-    console.log(`hardened vs light:              ${(hardenedAvg / lightAvg).toFixed(2)}x`);
+    console.log(`light VM:                                         ${(lightAvg / origAvg).toFixed(1)}x`);
+    console.log(`hardened VM (default):                            ${(hardenedAvg / origAvg).toFixed(1)}x`);
+    console.log(`hardened VM + nested VM:                          ${(hardenedNestedAvg / origAvg).toFixed(1)}x`);
+    console.log(`hardened VM, memoryProtection: false:             ${(noMemAvg / origAvg).toFixed(1)}x`);
+    console.log(`hardened VM, memoryProtection: false + nested VM: ${(noMemNestedAvg / origAvg).toFixed(1)}x`);
 }
 
 main().catch(console.error);
