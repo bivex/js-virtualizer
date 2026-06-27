@@ -47,6 +47,8 @@ const {deriveNestedKey, deriveInnerShuffleSeed} = require("./utils/vmCommon");
 const {innerOpNames: _innerOpNames} = require("./utils/innerOpcodes");
 const {generateInnerVMSource} = require("./utils/innerVmCodegen");
 const {applyHandlerObfuscation} = require("./utils/handlerObfuscation");
+const {applyStringEncryption} = require("./utils/stringEncryption");
+const {applyRegisterEncryption} = require("./utils/registerEncryption");
 const {
     compileAddInnerBytecode,
     compileFuncCallInnerBytecode,
@@ -798,6 +800,8 @@ async function transpile(code, options) {
     options.antiDump = options.antiDump ?? true;
     options.nestedVM = options.nestedVM ?? false;
     options.handlerObfuscation = options.handlerObfuscation ?? false;
+    options.stringEncryption = options.stringEncryption ?? false;
+    options.registerEncryption = options.registerEncryption ?? false;
     options.timeLock = options.timeLock ?? true;
     options.dispatchObfuscation = options.dispatchObfuscation ?? true;
     options.junkInStream = options.junkInStream ?? true;
@@ -941,7 +945,8 @@ async function transpile(code, options) {
                     cffStateRegister,
                     registerScrambleMap: scrambleMap,
                     reverseScrambleMap: reverseScrambleMap,
-                    endian: polyEndian
+                    endian: polyEndian,
+                    stringEncryptionKey: options.stringEncryption ? integrityKey : null,
                 });
                 
                 // Reserve top 8 registers to avoid collisions with VM/Interleaver/CFF internal registers (e.g. selectorReg, tempRegs, cffState)
@@ -1005,7 +1010,18 @@ async function transpile(code, options) {
                     }
                 });
 
+                const {encodeString: _assemblerEncodeString} = require('./utils/assembler');
+                if (generator.strEncSeed !== null) {
+                    const {encodeStringWithKey: _ewk, deriveStrEncSeed: _dss} = require('./utils/stringEncryption');
+                    const _seed = generator.strEncSeed;
+                    const _endian = generator.endian;
+                    _assemblerEncodeString._override = (str, endian) => {
+                        const enc = _ewk(str, _seed);
+                        return Buffer.concat([require('./utils/assembler').encodeDWORD(enc.length, endian || _endian), enc]);
+                    };
+                }
                 generator.generate();
+                _assemblerEncodeString._override = null;
                 applyMacroOpcodes(generator.chunk);
 
                 // Select opaque scratch registers NOW — after generate() so reservedRegisters contains all TL registers
@@ -1884,6 +1900,24 @@ async function transpile(code, options) {
             : (ilvSharedConfig ? ilvSharedConfig.integrityKey : null);
         if (hoKey) {
             accompanyingVM = applyHandlerObfuscation(accompanyingVM, hoKey);
+        }
+    }
+
+    if (options.stringEncryption) {
+        const seKey = rewriteQueue.length > 0
+            ? rewriteQueue[0].integrityKey
+            : (ilvSharedConfig ? ilvSharedConfig.integrityKey : null);
+        if (seKey) {
+            accompanyingVM = applyStringEncryption(accompanyingVM, seKey);
+        }
+    }
+
+    if (options.registerEncryption) {
+        const reKey = rewriteQueue.length > 0
+            ? rewriteQueue[0].integrityKey
+            : (ilvSharedConfig ? ilvSharedConfig.integrityKey : null);
+        if (reKey) {
+            accompanyingVM = applyRegisterEncryption(accompanyingVM, reKey);
         }
     }
 

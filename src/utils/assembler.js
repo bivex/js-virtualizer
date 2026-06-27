@@ -197,6 +197,9 @@ function encodeDWORD(dword, endian = "BE") {
 }
 
 function encodeString(str, endian = "BE") {
+    if (typeof encodeString._override === 'function') {
+        return encodeString._override(str, endian);
+    }
     const data = Buffer.from(str);
     const encrypted = Buffer.alloc(data.length);
 
@@ -206,6 +209,7 @@ function encodeString(str, endian = "BE") {
 
     return Buffer.concat([encodeDWORD(encrypted.length, endian), encrypted]);
 }
+encodeString._override = null;
 
 function encodeArray(array, offset, endian = "BE") {
     const length = array.length;

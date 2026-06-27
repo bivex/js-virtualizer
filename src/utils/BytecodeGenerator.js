@@ -14,6 +14,7 @@
  */
 
 const {VMChunk, Opcode, encodeDWORD, encodeString: _encodeString, BytecodeValue} = require("./assembler");
+const {deriveStrEncSeed, encodeStringWithKey} = require("./stringEncryption");
 const crypto = require("crypto");
 const {registerNames, binaryOperatorToOpcode, needsCleanup} = require("./constants");
 const {log, LogData} = require("./log");
@@ -64,6 +65,9 @@ class FunctionBytecodeGenerator {
         this.registerScrambleMap = options.registerScrambleMap || null;
         this.reverseScrambleMap = options.reverseScrambleMap || null;
         this.endian = options.endian || "BE";
+        this.strEncSeed = options.stringEncryptionKey
+            ? deriveStrEncSeed(options.stringEncryptionKey)
+            : null;
         this.outputRegister = this.randomRegister();
 
         // for arithmetics and loading values
@@ -146,6 +150,10 @@ class FunctionBytecodeGenerator {
     }
 
     encodeString(str) {
+        if (this.strEncSeed !== null) {
+            const encoded = encodeStringWithKey(str, this.strEncSeed);
+            return Buffer.concat([require('./assembler').encodeDWORD(encoded.length, this.endian), encoded]);
+        }
         return _encodeString(str, this.endian);
     }
 
