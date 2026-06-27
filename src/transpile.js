@@ -50,6 +50,7 @@ const {applyHandlerObfuscation} = require("./utils/handlerObfuscation");
 const {applyStringEncryption} = require("./utils/stringEncryption");
 const {applyRegisterEncryption} = require("./utils/registerEncryption");
 const {applyIntegrityCheck} = require("./utils/integrityCheck");
+const {applyOpaqueConstants, encryptChunkConstants, deriveOpaqueConstSeed} = require("./utils/opaqueConstants");
 const {
     compileAddInnerBytecode,
     compileFuncCallInnerBytecode,
@@ -804,6 +805,7 @@ async function transpile(code, options) {
     options.stringEncryption = options.stringEncryption ?? false;
     options.registerEncryption = options.registerEncryption ?? false;
     options.integrityCheck = options.integrityCheck ?? false;
+    options.opaqueConstants = options.opaqueConstants ?? false;
     options.timeLock = options.timeLock ?? true;
     options.dispatchObfuscation = options.dispatchObfuscation ?? true;
     options.junkInStream = options.junkInStream ?? true;
@@ -1519,6 +1521,10 @@ async function transpile(code, options) {
         const jumpSeed = JSVM.deriveJumpTargetSeed(sharedConfig.integrityKey);
         const instructionSeed = JSVM.deriveInstructionByteSeed(sharedConfig.integrityKey);
 
+        if (options.opaqueConstants) {
+            const ocSeed = deriveOpaqueConstSeed(sharedConfig.integrityKey);
+            encryptChunkConstants(mergedChunk, ocSeed);
+        }
         applyStatefulOpcodeEncoding(mergedChunk, opcodeSeed);
         applyJumpTargetEncoding(mergedChunk, jumpSeed, polyEndian);
         applyPerInstructionEncoding(mergedChunk, instructionSeed);
@@ -1859,6 +1865,10 @@ async function transpile(code, options) {
         }
         result = result.replace("%CFF_INNER_PROGRAM%", cffInnerProgram);
 
+        if (options.opaqueConstants) {
+            const ocSeed = deriveOpaqueConstSeed(integrityKey);
+            encryptChunkConstants(chunk, ocSeed);
+        }
         applyStatefulOpcodeEncoding(chunk, opcodeSeed);
         applyJumpTargetEncoding(chunk, jumpSeed, vmProfile.polyEndian);
         applyPerInstructionEncoding(chunk, instructionSeed);
@@ -1929,6 +1939,15 @@ async function transpile(code, options) {
             : (ilvSharedConfig ? ilvSharedConfig.integrityKey : null);
         if (icKey) {
             accompanyingVM = applyIntegrityCheck(accompanyingVM, icKey);
+        }
+    }
+
+    if (options.opaqueConstants) {
+        const ocKey = rewriteQueue.length > 0
+            ? rewriteQueue[0].integrityKey
+            : (ilvSharedConfig ? ilvSharedConfig.integrityKey : null);
+        if (ocKey) {
+            accompanyingVM = applyOpaqueConstants(accompanyingVM, ocKey);
         }
     }
 
