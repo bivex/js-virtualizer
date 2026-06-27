@@ -49,6 +49,7 @@ const {generateInnerVMSource} = require("./utils/innerVmCodegen");
 const {applyHandlerObfuscation} = require("./utils/handlerObfuscation");
 const {applyStringEncryption} = require("./utils/stringEncryption");
 const {applyRegisterEncryption} = require("./utils/registerEncryption");
+const {applyIntegrityCheck} = require("./utils/integrityCheck");
 const {
     compileAddInnerBytecode,
     compileFuncCallInnerBytecode,
@@ -802,6 +803,7 @@ async function transpile(code, options) {
     options.handlerObfuscation = options.handlerObfuscation ?? false;
     options.stringEncryption = options.stringEncryption ?? false;
     options.registerEncryption = options.registerEncryption ?? false;
+    options.integrityCheck = options.integrityCheck ?? false;
     options.timeLock = options.timeLock ?? true;
     options.dispatchObfuscation = options.dispatchObfuscation ?? true;
     options.junkInStream = options.junkInStream ?? true;
@@ -1918,6 +1920,15 @@ async function transpile(code, options) {
             : (ilvSharedConfig ? ilvSharedConfig.integrityKey : null);
         if (reKey) {
             accompanyingVM = applyRegisterEncryption(accompanyingVM, reKey);
+        }
+    }
+
+    if (options.integrityCheck) {
+        const icKey = rewriteQueue.length > 0
+            ? rewriteQueue[0].integrityKey
+            : (ilvSharedConfig ? ilvSharedConfig.integrityKey : null);
+        if (icKey) {
+            accompanyingVM = applyIntegrityCheck(accompanyingVM, icKey);
         }
     }
 
