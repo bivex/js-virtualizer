@@ -261,6 +261,20 @@ Generated virtualized wrappers protect embedded bytecode with a per-function int
 | Nested VM | browser support | ✅ | nested VM works in browser environments (Node.js and browser targets) |
 | Runtime | automatic top-level initializer virtualization | ✅ | safe top-level variable initializers are auto-wrapped into helper VMs without requiring `// @virtualize` markers |
 
+## VM Architecture & Specifications
+
+The JSVM used by `js-virtualizer` is a custom-designed, register-based execution engine optimized for runtime safety and obfuscation. It has the following properties:
+
+### Core Architecture
+- **Register-Based**: Relies on a virtual register bank (up to 256 registers) for state storage, avoiding a traditional evaluation stack and reducing register dump predictability.
+- **Opcode Set**: Implements an instruction set of ~75 custom opcodes covering logic, arithmetic, function/method calls (preserving `this`), closures, logical operators, and exception handling (`try-catch`).
+- **Context Isolation**: Uses child VM contexts to handle asynchronous execution and generator state, preventing register clobbering during concurrent calls.
+
+### Hardening & Protection
+- **Multi-Phase Dispatch Loop**: The execution engine splits instruction dispatch into six phases: *Fetch*, *Decode*, *Pre-Execute*, *Execute*, *Post-Execute*, and *Dummy*. This spreads execution traces across multiple helper functions and makes static analysis of the dispatch flow highly complex.
+- **Runtime Opcode Derivation**: Translates bytecode instructions using dynamic alias maps. The same logical opcode resolves to different numeric IDs at runtime based on the evolving state of the VM (hybrid/stateful derivation).
+- **Just-in-Time Decompression & Decryption**: Bytecode is embedded as compressed, encrypted envelopes. The VM decrypts and inflates the bytecode in memory just-in-time during load, using per-function keys registered at runtime.
+
 ## Performance
 
 js-virtualizer adds measurable overhead. The table below comes from a synthetic hot-loop benchmark (`compute(50000)`, 10 calls per run, 3 runs) to give a worst-case picture.
