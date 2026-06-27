@@ -181,6 +181,7 @@ Generated virtualized wrappers protect embedded bytecode with a per-function int
 | Functions | callbacks | ✅ | |
 | Functions | `this` inside virtualized functions | ✅ | top-level `this` and VM callbacks supported |
 | Runtime | browser execution | ✅ | browser-aware `src/vm_dist.js` runs in browser-like runtimes without a compatibility wrapper; compressed payloads use `globalThis.pako.inflate` |
+| Runtime | ESM Module support | ✅ | transpiler detects ESM and injects ES6 imports and default/named exports, including dynamic require wrappers in ESM VM runtimes |
 | Runtime | randomized register VM profiles | ✅ | wrappers embed hardened per-function VM profiles by default, biased toward larger register files plus stronger dispatcher/alias derivation strategies; explicit `vmProfile` overrides are supported |
 | Async | `await` | ✅ | |
 | Async | stored promises | ✅ | |
@@ -246,7 +247,7 @@ Generated virtualized wrappers protect embedded bytecode with a per-function int
 | Obfuscation | dedicated VM anti-debug layer | ✅ | VM instances can arm timing-gap and DevTools heuristics that perturb dispatcher state and optionally trigger debugger traps |
 | Obfuscation | dispatch loop obfuscation | ✅ | multi-phase dispatch (fetch, decode, pre-exec, execute, post, dummy) with interleaved dummy phases |
 | Obfuscation | time-lock / proof-of-work | ✅ | hashcash-style PoW challenge solved at VM startup before execution begins |
-| Obfuscation | code interleaving | ✅ | multiple virtualized functions merged into a single unified bytecode blob with shared VM instance |
+| Obfuscation | code interleaving | ✅ | multiple virtualized functions merged into a single unified bytecode blob with shared VM instance; supports rest parameters and module exports |
 | Obfuscation | environment lock | ✅ | restrict execution to specific hostnames or environments |
 | Obfuscation | bytecode compression | ✅ | bytecode payloads are zlib/pako compressed before embedding and decompressed at load time |
 | Obfuscation | advanced CFF (jump tables) | ✅ | indirect jump table dispatch with affine-scrambled case values and computed goto patterns; opt-in via `advancedCFF: true` |
