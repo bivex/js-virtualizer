@@ -2,6 +2,8 @@
 
 Virtualization-based obfuscation for JavaScript.
 
+![js-virtualizer preview](docs/images/code_obfuscation_preview.jpg)
+
 ![Unit Tests](https://github.com/aesthetic0001/js-virtualizer/actions/workflows/tests.yml/badge.svg) ![npm downloads](https://img.shields.io/npm/dm/js-virtualizer) ![npm version](https://img.shields.io/npm/v/js-virtualizer) ![License](https://img.shields.io/npm/l/js-virtualizer) 
 
 js-virtualizer transpiles selected JavaScript functions into custom bytecode and runs them inside a JavaScript VM. It is built for targeted function protection rather than whole-program virtualization.
