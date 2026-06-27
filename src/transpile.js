@@ -46,6 +46,7 @@ const {generateTTables, whiteboxEncrypt} = require("./utils/whiteboxCipher");
 const {deriveNestedKey, deriveInnerShuffleSeed} = require("./utils/vmCommon");
 const {innerOpNames: _innerOpNames} = require("./utils/innerOpcodes");
 const {generateInnerVMSource} = require("./utils/innerVmCodegen");
+const {applyHandlerObfuscation} = require("./utils/handlerObfuscation");
 const {
     compileAddInnerBytecode,
     compileFuncCallInnerBytecode,
@@ -796,6 +797,7 @@ async function transpile(code, options) {
     options.polymorphic = options.polymorphic ?? true;
     options.antiDump = options.antiDump ?? true;
     options.nestedVM = options.nestedVM ?? false;
+    options.handlerObfuscation = options.handlerObfuscation ?? false;
     options.timeLock = options.timeLock ?? true;
     options.dispatchObfuscation = options.dispatchObfuscation ?? true;
     options.junkInStream = options.junkInStream ?? true;
@@ -1875,6 +1877,15 @@ async function transpile(code, options) {
     }
 
     let transpiledResult = escodegen.generate(ast);
+
+    if (options.handlerObfuscation) {
+        const hoKey = rewriteQueue.length > 0
+            ? rewriteQueue[0].integrityKey
+            : (ilvSharedConfig ? ilvSharedConfig.integrityKey : null);
+        if (hoKey) {
+            accompanyingVM = applyHandlerObfuscation(accompanyingVM, hoKey);
+        }
+    }
 
     if (options.passes.has("ObfuscateVM")) {
         accompanyingVM = await obfuscateCode(accompanyingVM, {

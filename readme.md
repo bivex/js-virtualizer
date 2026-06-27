@@ -114,6 +114,7 @@ These features are opt-in (default `false`) and provide additional obfuscation l
   - **Register bank rotation** (`REG_ROTATE`) - periodic seeded permutation of register banks at runtime, preventing static memory dump analysis since register values are never in predictable locations
   - **Memory region shuffle** (`MEM_SHUFFLE`) - runtime permutation of specified register regions
   - **Fake stack frames** - decoy register save/restore sequences with opaque predicates injected between real operations to confuse memory analysis
+- `handlerObfuscation` (bool, default `false`) - replaces the semantic bodies of arithmetic, comparison, and bitwise opcode handlers with key-derived obfuscated equivalents. Without this, a reverse engineer who deobfuscates the VM can read `this.write(dest, l + r)` and immediately identify the opcode as ADD. With it, integer results are encoded through a per-build XOR chain derived from the bytecode integrity key before being written to the register file. String and float results fall back to unencoded paths to preserve JS semantics. Handlers covered: `ADD`, `SUBTRACT`, `MULTIPLY`, `DIVIDE`, `MODULO`, `POWER`, `EQ`, `EQ_COERCE`, `NOT_EQ`, `NOT_EQ_COERCE`, `LESS_THAN`, `LESS_THAN_EQ`, `GREATER_THAN`, `GREATER_THAN_EQ`, `AND`, `OR`, `XOR`, `SHIFT_LEFT`, `SHIFT_RIGHT`, `BNOT`, `NEGATE`, `TEST`, `TEST_NEQ`. Compatible with all other protections including `nestedVM`, `controlFlowFlattening`, and `codeInterleaving`.
 
 #### Dynamic code loading
 
@@ -254,6 +255,7 @@ Generated virtualized wrappers protect embedded bytecode with a per-function int
 | Obfuscation | bytecode compression | ✅ | bytecode payloads are zlib/pako compressed before embedding and decompressed at load time |
 | Obfuscation | advanced CFF (jump tables) | ✅ | indirect jump table dispatch with affine-scrambled case values and computed goto patterns; opt-in via `advancedCFF: true` |
 | Obfuscation | memory layout obfuscation | ✅ | stack canaries, register bank rotation, memory region shuffling, and fake stack frames; opt-in via `memoryLayoutObfuscation: true` |
+| Obfuscation | handler semantics obfuscation | ✅ | arithmetic, comparison, and bitwise handler bodies replaced with key-derived XOR-chain equivalents; opcode semantics are opaque even after VM deobfuscation; opt-in via `handlerObfuscation: true` |
 | Obfuscation | dynamic code loading | ✅ | runtime bytecode decryption (`DYN_LOAD`), execution (`DYN_EXEC`), and hot-patching (`DYN_PATCH`) with seeded XOR encryption |
 | Nested VM | two-layer virtualization | ✅ | critical handlers (ADD, FUNC_CALL, CFF_DISPATCH) are re-virtualized inside a 16-opcode inner VM with encrypted bytecode and shuffled opcode IDs |
 | Nested VM | inner opcode shuffle | ✅ | inner VM opcode IDs are permuted per-function, preventing static analysis of the inner instruction set |
